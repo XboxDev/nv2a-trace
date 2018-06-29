@@ -5,135 +5,110 @@ from xboxpy.xboxpy import nv2a
 import struct
 from PIL import Image
 
+def decodeTexture(data, size, pitch, swizzled, bits_per_pixel, channel_sizes, channel_offsets):
+
+  # Check argument sanity
+  assert(len(size) == 2) #FIXME: Support 1D and 3D?
+  assert(len(channel_offsets) == len(channel_sizes))
+
+  # Helper function to extract integer at bit offset with bit size
+  def get_bits(bits, offset, length):
+    mask = (1 << length) - 1
+    return(bits >> offset) & mask
+
+  width = size[0]
+  height = size[1]
+
+  if (len(channel_sizes) == 3):
+    mode = 'RGB'
+  elif (len(channel_sizes) == 4):
+    mode = 'RGBA'
+
+  img = Image.new(mode, (width, height))
+
+  #FIXME: Unswizzle data on the fly instead
+  if swizzled:
+    if width == 640 and height <= 480 and pitch == 2560:
+      data = nv2a.Unswizzle(data, bits_per_pixel, (width, height), pitch)
+    else:
+      data = nv2a._Unswizzle(data, bits_per_pixel, (width, height), pitch)
+
+  pixels = img.load() # create the pixel map
+
+  assert(bits_per_pixel % 8 == 0)
+
+  for y in range(height):
+    for x in range(width):
+
+      pixel_offset = y * pitch + x * bits_per_pixel // 8
+      pixel_bytes = data[pixel_offset:pixel_offset + bits_per_pixel // 8]
+      pixel_bits = int.from_bytes(pixel_bytes, byteorder='little')
+
+      pixel_channels = ()
+      for channel_offset, channel_size in zip(channel_offsets, channel_sizes):
+        pixel_channels += (get_bits(pixel_bits, channel_offset, channel_size),)
+      pixels[x, y] = pixel_channels
+
+  return img
+      
+
 def dumpTexture(xbox, offset, pitch, fmt_color, width, height):
   img = None
 
-  #FIXME: Why not use the one from the CLI?!
-  bits_per_pixel = 0
-  auto_pitch = 0
+  # bits per pixel, channel sizes, channel offsets.
+  # Right hand side is always in RGB or RGBA channel order.
+  R5G6B5 = (16, (5,6,5), (11, 5, 0))
+  A4R4G4B4 = (16, (4,4,4,4), (8, 4, 0, 12))
+  A1R5G5B5 = (16, (5,5,5,1), (10, 5, 0, 15))
+  X1R5G5B5 = (16, (5,5,5), (10, 5, 0))
+  A8R8G8B8 = (32, (8,8,8,8), (16, 8, 0, 24))
+  X8R8G8B8 = (32, (8,8,8), (16, 8, 0))
 
-
-  if fmt_color == 4:
-    pass #FIXME!
-
-
-  elif fmt_color == 5:
-    auto_pitch = width * 2
-    bits_per_pixel = 16
-    img = Image.new( 'RGB', (width, height))
-    swizzled = True
-  elif fmt_color == 6:
-    auto_pitch = width * 4
-    bits_per_pixel = 32
-    img = Image.new( 'RGBA', (width, height))
-    swizzled = True
-  elif fmt_color == 7:
-    auto_pitch = width * 4
-    bits_per_pixel = 32
-    img = Image.new( 'RGB', (width, height))
-    swizzled = True
-
-
-  elif fmt_color == 0xB:
-    pass #FIXME!
-
-
+  if fmt_color == 0x2: tex_info = (True, A1R5G5B5)
+  elif fmt_color == 0x3: tex_info = (True, X1R5G5B5)
+  elif fmt_color == 0x4: tex_info = (True, A4R4G4B4)
+  elif fmt_color == 0x5: tex_info = (True, R5G6B5)
+  elif fmt_color == 0x6: tex_info = (True, A8R8G8B8)
+  elif fmt_color == 0x7: tex_info = (True, X8R8G8B8)
+  elif fmt_color == 0xB: pass #FIXME! Palette mode!
   elif fmt_color == 0xC: # DXT1
-    img = Image.new( 'RGB', (width, height))
-    auto_pitch = width // 2
-    bits_per_pixel = 4
-    swizzled = False
+    data = xbox.read(0x80000000 | offset, width * height // 2)
+    img = Image.frombytes('RGB', img.size, data, 'bcn', 1) # DXT1
+  elif fmt_color == 0xE: # DXT3
+    data = xbox.read(0x80000000 | offset, width * height * 1)
+    img = Image.frombytes('RGBA', img.size, data, 'bcn', 2) # DXT3
   elif fmt_color == 0xF: # DXT5
-    img = Image.new( 'RGBA', (width, height))
-    auto_pitch = width * 1
-    bits_per_pixel = 8
-    swizzled = False
-  elif fmt_color == 0x11:
-    img = Image.new( 'RGB', (width, height))
-    auto_pitch = width * 2
-    bits_per_pixel = 16
-    swizzled = False
-  elif fmt_color == 0x12:
-    auto_pitch = width * 4
-    bits_per_pixel = 32
-    img = Image.new( 'RGBA', (width, height))
-    swizzled = False
-  elif fmt_color == 0x1E:
-    auto_pitch = width * 4
-    bits_per_pixel = 32
-    img = Image.new( 'RGB', (width, height))
-    swizzled = False
-
-
-  elif fmt_color == 0x2E:
-    pass #FIXME!
-
-
-  elif fmt_color == 0x30:
-    pass #FIXME!
-
-
-  elif fmt_color == 0x31:
-    pass #FIXME!
-
-
+    data = xbox.read(0x80000000 | offset, width * height * 1)
+    img = Image.frombytes('RGBA', img.size, data, 'bcn', 3) # DXT5
+  elif fmt_color == 0x10: tex_info = (False, A1R5G5B5A5)
+  elif fmt_color == 0x11: tex_info = (False, R5G6B5)
+  elif fmt_color == 0x12: tex_info = (False, A8R8G8B8)
+  elif fmt_color == 0x1C: tex_info = (False, X1R5G5B5)
+  elif fmt_color == 0x1D: tex_info = (False, A4R4G4B4)
+  elif fmt_color == 0x1E: tex_info = (False, X8R8G8B8)
+  elif fmt_color == 0x2E: pass #FIXME! Depth format
+  elif fmt_color == 0x30: pass #FIXME! Depth format
+  elif fmt_color == 0x31: pass #FIXME! Depth format
   else:
-    print("\n\nUnknown texture format: 0x%X\n\n" % fmt_color)
-    raise Exception("lolz")
-    return
+    raise Exception("Unknown texture format: 0x%X" % fmt_color)
 
-  if pitch == 0:
-    pitch = auto_pitch
+  # Some formats might have been parsed already    
+  if img == None:
 
-  if img != None:
+    swizzled = tex_info[0]
+    format_info = tex_info[1]
+
+    # Parse format info
+    bits_per_pixel, channel_sizes, channel_offsets = format_info
+
+    #FIXME: Avoid this nasty ~~convience feature~~ hack
+    if pitch == 0:
+      pitch = width * bits_per_pixel // 8
 
     #FIXME: Might want to skip the empty area if pitch and width diverge?
     data = xbox.read(0x80000000 | offset, pitch * height)
+    img = decodeTexture(data, (width, height), pitch, swizzled, bits_per_pixel, channel_sizes, channel_offsets)
 
-    if img == None:
-
-      pass #FIXME: Save raw data to disk
-
-    else:
-
-      if swizzled:
-        if width == 640 and height <= 480 and pitch == 2560:
-          data = nv2a.Unswizzle(data, bits_per_pixel, (width, height), pitch)
-        else:
-          data = nv2a._Unswizzle(data, bits_per_pixel, (width, height), pitch)
-      
-      pixels = img.load() # create the pixel map
-
-      if fmt_color == 0x6 or fmt_color == 0x7 or fmt_color == 0x12 or fmt_color == 0x1E:
-        for x in range(img.size[0]):    # for every col:
-          for y in range(img.size[1]):    # For every row
-            blue = data[(y * pitch + x * 4) + 0]
-            green = data[(y * pitch + x * 4) + 1]
-            red = data[(y * pitch + x * 4) + 2]
-            if fmt_color == 0x7 or fmt_color == 0x1E:
-              pixels[x, y] = (red, green, blue)
-            else:
-              alpha = data[(y * pitch + x * 4) + 3]
-              pixels[x, y] = (red, green, blue, alpha) # set the colour accordingly
-
-      elif fmt_color == 0xC:
-        img = Image.frombytes("RGBA", img.size, data, 'bcn', 1) # DXT1
-
-      #FIXME:   'dxt3': ('bcn', 2),
-
-      elif fmt_color == 0xF:
-        img = Image.frombytes("RGBA", img.size, data, 'bcn', 3) # DXT5
-
-      elif fmt_color == 0x5 or fmt_color == 0x11:
-        for x in range(img.size[0]):    # for every col:
-          for y in range(img.size[1]):    # For every row
-            pixel = struct.unpack_from("<H", data, y * pitch + 2 * x)[0]
-            blue = (pixel >> 11) & 0x1F
-            green = (pixel >> 5) & 0x3F
-            red = pixel & 0x1F
-            #FIXME: Fill lower bits with lowest bit
-            pixels[x, y] = (red << 3, green << 2, blue << 3, 255) # set the colour accordingly
-    
   return img
 
 def dumpTextureUnit(xbox, i):
@@ -145,7 +120,7 @@ def dumpTextureUnit(xbox, i):
   height_shift = (fmt >> 24) & 0xF
   width = 1 << width_shift
   height = 1 << height_shift
-  print("Texture %d [0x%08X, %d x %d (pitch: 0x%X), format %d]" % (i, offset, width, height, pitch, fmt_color))
+  print("Texture %d [0x%08X, %d x %d (pitch: 0x%X), format 0x%X]" % (i, offset, width, height, pitch, fmt_color))
   img = dumpTexture(xbox, offset, pitch, fmt_color, width, height)
   return img
     
