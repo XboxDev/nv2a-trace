@@ -21,7 +21,7 @@ nv2a-trace can dump intermediate rendering steps like this:
 
 ![Screenshot of Burnout 3](https://i.imgur.com/a2GuIFz.png)
 
-Currently, most output will be send to PNG files in the current folder.
+Currently, most output will be send to PNG files in the "out" folder.
 Additionally a "debug.html" will be created which shows the captured commands.
 This output format is a temporary solution.
 Eventually there'll be one of the following:

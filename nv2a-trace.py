@@ -2,6 +2,13 @@
 
 from xboxpy import *
 
+# Create output folder
+import os
+try:
+  os.mkdir("out")
+except:
+  pass
+
 import time
 import signal
 import sys

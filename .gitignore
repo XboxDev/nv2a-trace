@@ -1,5 +1,4 @@
 __pycache__/
 
 # Debug output
-*.png
-*.html
+out/

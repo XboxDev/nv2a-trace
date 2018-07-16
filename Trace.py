@@ -1,3 +1,4 @@
+import os
 import struct
 
 import Texture
@@ -8,7 +9,7 @@ commandCount = 0
 flipStallCount = 0
 
 
-debugLog = "debug.html"
+debugLog = os.path.join("out", "debug.html")
 def addHTML(xx):
   f = open(debugLog,"a")
   f.write("<tr>")
@@ -99,7 +100,7 @@ def recordPGRAPHMethod(xbox, method, data):
           path = "command%d--tex_%d.png" % (commandCount, i)
           img = Texture.dumpTextureUnit(xbox, i)
           if img != None:
-            img.save(path)
+            img.save(os.path.join("out", path))
           extraHTML += ['<img height="128px" src="%s" alt="%s"/>' % (path, path)]
       else:
         # Dump finished surface
@@ -153,7 +154,7 @@ def recordPGRAPHMethod(xbox, method, data):
             if True:
               img = img.convert('RGB')
 
-            img.save(path)
+            img.save(os.path.join("out", path))
 
   # Check for texture address changes
   for i in range(4):
