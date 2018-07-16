@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from xboxpy.xboxpy import *
+from xboxpy import *
 
 import time
 import signal

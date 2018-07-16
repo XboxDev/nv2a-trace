@@ -1,6 +1,6 @@
 #FIXME: Move to xboxpy.NV2A.PGRAPH.Texture
 
-from xboxpy.xboxpy import nv2a
+from xboxpy import nv2a
 
 import struct
 from PIL import Image

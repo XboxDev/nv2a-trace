@@ -40,7 +40,7 @@ Please read its documentation to find out how to configure it for your Xbox.
 Afterwards, you can run these commands:
 
 ```
-git clone --recursive https://github.com/XboxDev/nv2a-trace.git
+git clone https://github.com/XboxDev/nv2a-trace.git
 cd nv2a-trace
 python3 nv2a-trace.py
 ```
