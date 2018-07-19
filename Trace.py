@@ -15,10 +15,10 @@ def addHTML(xx):
   f.write("<tr>")
   for x in xx:
     f.write("<td>%s</td>" % x)
-  f.write("</tr>")
+  f.write("</tr>\n")
   f.close()
 f = open(debugLog,"w")
-f.write("<html><head><style>body { font-family: sans-serif; background:#333; color: #ccc } img { border: 1px solid #FFF; } td, tr, table { background: #444; padding: 10px; border:1px solid #888; border-collapse: collapse; }</style></head><body><table>")
+f.write("<html><head><style>body { font-family: sans-serif; background:#333; color: #ccc } img { border: 1px solid #FFF; } td, tr, table { background: #444; padding: 10px; border:1px solid #888; border-collapse: collapse; }</style></head><body><table>\n")
 #FIXME: atexit close tags.. but yolo!
 f.close()
 addHTML(["<b>#</b>", "<b>Opcode / Method</b>", "..."])
