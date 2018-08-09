@@ -37,19 +37,24 @@ def html_print(s):
 
 import atexit
 
-exchange_u32_code_addr = None
+def load_binary(xbox, code):
+  code_addr = xbox.ke.MmAllocateContiguousMemory(len(code))
+  print("Allocated 0x%08X" % code_addr)
+  def free_code():
+    print("Free'ing 0x%08X" % code_addr)
+    xbox.ke.MmFreeContiguousMemory(code_addr)
+  atexit.register(free_code)
+  xbox.write(code_addr, code)
+  return code_addr
+
+
+exchange_u32_addr = None
 def exchange_u32_call(xbox, address, value):
-  global exchange_u32_code_addr
-  if exchange_u32_code_addr is None:
-    #code = bytes([ 0xFA, 0x58, 0x5A, 0x87, 0x02, 0xFB, 0xC3 ])
-    code = bytes([ 0xFA, 0x8B, 0x44, 0x24, 0x04, 0x8B, 0x54, 0x24, 0x08, 0x87, 0x02, 0xFB, 0xC2, 0x08, 0x00 ])
-    exchange_u32_code_addr = xbox.ke.MmAllocateContiguousMemory(len(code))
-    def unalloc_exchange_u32():
-      xbox.ke.MmFreeContiguousMemory(exchange_u32_code_addr)
-    atexit.register(unalloc_exchange_u32)
-    xbox.write(exchange_u32_code_addr, code)
-    print("exchange_u32 installed at 0x%08X" % exchange_u32_code_addr)
-  return xbox.call(exchange_u32_code_addr, struct.pack("<LL", value, address))['eax']
+  global exchange_u32_addr
+  if exchange_u32_addr is None:
+    exchange_u32_addr = load_binary(xbox, bytes([ 0xFA, 0x8B, 0x44, 0x24, 0x04, 0x8B, 0x54, 0x24, 0x08, 0x87, 0x02, 0xFB, 0xC2, 0x08, 0x00 ]))
+    print("exchange_u32 installed at 0x%08X" % exchange_u32_addr)
+  return xbox.call(exchange_u32_addr, struct.pack("<LL", value, address))['eax']
 
 def exchange_u32_simple(xbox, address, value):
   old_value = xbox.read_u32(address)
@@ -76,6 +81,23 @@ def dumpPGRAPH(xbox):
 
 
 
+kick_fifo_addr = None
+def kick_fifo_call(xbox, expected_put):
+  global kick_fifo_addr
+  if kick_fifo_addr is None:
+    kick_fifo_addr = load_binary(xbox, open("kick_fifo", "rb").read())
+    print("kick_fifo installed at 0x%08X" % kick_fifo_addr)
+  eax = xbox.call(kick_fifo_addr, struct.pack("<L", expected_put))['eax']
+  assert(eax != 0xBADBAD)
+
+# This version is open to race conditions, where PUT is modified.
+# This might lead to accidental command injection.
+def kick_fifo_simple(xbox, expected_put):
+  resume_fifo_pusher(xbox)
+  pause_fifo_pusher(xbox)
+
+def kick_fifo(xbox, expected_put):
+  kick_fifo_call(xbox, expected_put)
 
 
 class Tracer():
@@ -163,7 +185,8 @@ class Tracer():
       #return []
       pass
     else:
-      swizzled = False
+      #swizzled = False
+      pass
 
 
     if color_fmt == 0x3: # ARGB1555
@@ -377,11 +400,6 @@ class Tracer():
     pass
     #FIXME: Dump texture here?
 
-  def CheckTarget(self, xbox, data, *args):
-    pass
-    #FIXME: run FIFO atomiclly instead
-    time.sleep(0.1)
-    return []
 
 
 
@@ -438,11 +456,8 @@ class Tracer():
     #  methodHooks(0x1B00 + 64 * i, [],    [HandleSetTexture], i)
 
     # Add the list of commands which might trigger CPU actions
-    self.methodHooks(0x97, 0x0100, [],                 [self.CheckTarget])     # NOP
-    self.methodHooks(0x97, 0x0130, [],                 [self.CheckTarget,      # FLIP_STALL
-                                                        self.HandleFlipStall])
-    self.methodHooks(0x97, 0x1D70, [],                 [self.CheckTarget,      # BACK_END_WRITE_SEMAPHORE_RELEASE
-                                                        self.DumpSurfaces])
+    self.methodHooks(0x97, 0x0130, [],                 [self.HandleFlipStall]) # FLIP_STALL
+    self.methodHooks(0x97, 0x1D70, [],                 [self.DumpSurfaces])    # BACK_END_WRITE_SEMAPHORE_RELEASE
 
   
 
@@ -462,14 +477,12 @@ class Tracer():
         print("PUT was modified and pusher was already active!")
         time.sleep(60.0)
       self.real_dma_put_addr = real
-      traceback.print_stack()
+      #traceback.print_stack()
 
 
 
   def run_fifo(self, xbox, xbox_helper, put_target):
     global DebugPrint
-
-    step = 0
 
     # Queue the commands
     self.WritePUT(xbox, put_target)
@@ -487,7 +500,6 @@ class Tracer():
     #FIXME: This used to be a check which made sure that `v_dma_get_addr` did
     #       never leave the known PB.
     while self.real_dma_get_addr != put_target:
-      print("step: %d" % step)
       if DebugPrint: print("At 0x%08X, target is 0x%08X (Real: 0x%08X)" % (self.real_dma_get_addr, put_target, self.real_dma_put_addr))
 
       # Disable PGRAPH, so it can't run anything from CACHE.
@@ -501,17 +513,17 @@ class Tracer():
         # this command.
         self.WritePUT(xbox, self.target_dma_put_addr)
 
-        # Kick our planned commands into CACHE now.
-        xbox_helper.resume_fifo_pusher()
-        xbox_helper.pause_fifo_pusher()
+        # Kick commands into CACHE.
+        kick_fifo(xbox, self.target_dma_put_addr)
+
+        #print("PUT STATE 0x%08X" % xbox.read_u32(0xFD003220))
+
 
       # Run the commands we have moved to CACHE, by enabling PGRAPH.
       xbox_helper.enable_pgraph_fifo()
 
       # Get the updated PB address.
       self.real_dma_get_addr = xbox.read_u32(dma_get_addr)
-
-      step += 1
 
     # This is just to confirm that nothing was modified in the final chunk
     self.WritePUT(xbox, self.target_dma_put_addr)
@@ -653,13 +665,10 @@ class Tracer():
         if len(post_callbacks) > 0:
 
           # If we reached target, we can't step again without leaving valid buffer
-          print(parser_addr)
-          print(self.real_dma_put_addr)
           assert(parser_addr != self.real_dma_put_addr)
 
           # Go where we want to go (equivalent to step)
           self.run_fifo(xbox, xbox_helper, post_addr)
-          print("[FAST] PUT: 0x%08X == 0x%08X" % (post_addr, xbox.read_u32(dma_put_addr)))
 
           # We have processed all bytes now
           unprocessed_bytes = 0
@@ -668,9 +677,6 @@ class Tracer():
           for callback in post_callbacks:
             post_info += callback(xbox, method_info['data'][0])
 
-          #FIXME: This repeats the JumpCheck for testing
-          print("[SLOW] PUT: 0x%08X == 0x%08X" % (post_addr, xbox.read_u32(dma_put_addr)))
-          self.WritePUT(xbox, post_addr)
 
         # Add the pushbuffer command to log
         self.recordPushBufferCommand(xbox, parser_addr, method_info, pre_info, post_info)

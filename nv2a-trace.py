@@ -129,18 +129,21 @@ def main():
 
       #time.sleep(0.5)
 
-      # Avoid queuing up too many bytes
+      # Avoid queuing up too many bytes: while the buffer is being processed,
+      # D3D might fixup the buffer if GET is still too far away.
       if v_dma_get_addr == trace.real_dma_put_addr or bytes_queued >= 200:
         print("Flushing buffer until (0x%08X)" % v_dma_get_addr)
         trace.run_fifo(xbox, xbox_helper, v_dma_get_addr)
         bytes_queued = 0
-        xbox_helper.dumpPBState()
-        X = 4
-        print(["PRE "] + ["%08X" % x for x in struct.unpack("<" + "L" * X, xbox.read(0x80000000 | (v_dma_get_addr - X * 4), X * 4))])
-        print(["POST"] + ["%08X" % x for x in struct.unpack("<" + "L" * X, xbox.read(0x80000000 | (v_dma_get_addr        ), X * 4))])
+        if False:
+          xbox_helper.dumpPBState()
+          X = 4
+          print(["PRE "] + ["%08X" % x for x in struct.unpack("<" + "L" * X, xbox.read(0x80000000 | (v_dma_get_addr - X * 4), X * 4))])
+          print(["POST"] + ["%08X" % x for x in struct.unpack("<" + "L" * X, xbox.read(0x80000000 | (v_dma_get_addr        ), X * 4))])
 
       if v_dma_get_addr == trace.real_dma_put_addr:
-        break
+        print("Reached end of buffer?!")
+        #break
 
       # Verify we are where we think we are
       if bytes_queued == 0:
