@@ -110,6 +110,10 @@ def kick_fifo(xbox, expected_put):
 
 class Tracer():
 
+  def out(self, suffix, contents):
+    with open(("out/command%d_" % self.commandCount)+ suffix, "wb") as f:
+      f.write(contents)
+
 
 
 
@@ -139,14 +143,29 @@ class Tracer():
     global PixelDumping
     if not PixelDumping:
       return []
-      
-    return [] #FIXME: Remove, dirty hack to speedup debugging
 
     extraHTML = []
 
     for i in range(4):
       path = "command%d--tex_%d.png" % (self.commandCount, i)
-      img = Texture.dumpTextureUnit(xbox, i)
+
+      offset = xbox.read_u32(0xFD401A24 + i * 4) # NV_PGRAPH_TEXOFFSET0
+      pitch = 0 # xbox.read_u32(0xFD4019DC + i * 4) # NV_PGRAPH_TEXCTL1_0_IMAGE_PITCH
+      fmt = xbox.read_u32(0xFD401A04 + i * 4) # NV_PGRAPH_TEXFMT0
+      fmt_color = (fmt >> 8) & 0x7F
+      width_shift = (fmt >> 20) & 0xF
+      height_shift = (fmt >> 24) & 0xF
+      width = 1 << width_shift
+      height = 1 << height_shift
+
+      if True:
+        pass
+        #FIXME: self.out("tex-%d.bin" % (i), xbox.read(0x80000000 | offset, pitch * height))
+
+
+      print("Texture %d [0x%08X, %d x %d (pitch: 0x%X), format 0x%X]" % (i, offset, width, height, pitch, fmt_color))
+      img = Texture.dumpTexture(xbox, offset, pitch, fmt_color, width, height)
+
       if img != None:
         img.save(os.path.join("out", path))
       extraHTML += ['<img height="128px" src="%s" alt="%s"/>' % (path, path)]
@@ -206,15 +225,12 @@ class Tracer():
 
     # Dump stuff we might care about
     if True:
-      def out(suffix, contents):
-        with open(("out/command%d_" % self.commandCount)+ suffix, "wb") as f:
-          f.write(contents)
-      out("pgraph.bin", dumpPGRAPH(xbox))
-      out("pfb.bin", dumpPFB(xbox))
+      self.out("pgraph.bin", dumpPGRAPH(xbox))
+      self.out("pfb.bin", dumpPFB(xbox))
       if color_offset != 0x00000000:
-        out("mem-2.bin", xbox.read(0x80000000 | color_offset, color_pitch * height))
+        self.out("mem-2.bin", xbox.read(0x80000000 | color_offset, color_pitch * height))
       if depth_offset != 0x00000000:
-        out("mem-3.bin", xbox.read(0x80000000 | depth_offset, depth_pitch * height))
+        self.out("mem-3.bin", xbox.read(0x80000000 | depth_offset, depth_pitch * height))
 
     
 

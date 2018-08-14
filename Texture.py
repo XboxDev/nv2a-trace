@@ -154,18 +154,5 @@ def dumpTexture(xbox, offset, pitch, fmt_color, width, height):
     img = decodeTexture(data, (width, height), pitch, swizzled, bits_per_pixel, channel_sizes, channel_offsets)
 
   return img
-
-def dumpTextureUnit(xbox, i):
-  offset = xbox.read_u32(0xFD401A24 + i * 4) # NV_PGRAPH_TEXOFFSET0
-  pitch = 0 # xbox.read_u32(0xFD4019DC + i * 4) # NV_PGRAPH_TEXCTL1_0_IMAGE_PITCH
-  fmt = xbox.read_u32(0xFD401A04 + i * 4) # NV_PGRAPH_TEXFMT0
-  fmt_color = (fmt >> 8) & 0x7F
-  width_shift = (fmt >> 20) & 0xF
-  height_shift = (fmt >> 24) & 0xF
-  width = 1 << width_shift
-  height = 1 << height_shift
-  print("Texture %d [0x%08X, %d x %d (pitch: 0x%X), format 0x%X]" % (i, offset, width, height, pitch, fmt_color))
-  img = dumpTexture(xbox, offset, pitch, fmt_color, width, height)
-  return img
     
 
