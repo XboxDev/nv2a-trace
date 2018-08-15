@@ -86,8 +86,22 @@ def dumpPFB(xbox):
   assert(len(buffer) == 0x1000)
   return bytes(buffer)
 
+def read_pgraph_rdi(xbox, offset, count):
+  #FIXME: Assert pusher access is disabled
+  #FIXME: Assert PGRAPH idle
+  
+  NV10_PGRAPH_RDI_INDEX = 0xFD400750
+  NV10_PGRAPH_RDI_DATA = 0xFD400754
 
-
+  xbox.write_u32(NV10_PGRAPH_RDI_INDEX, offset)
+  data = bytearray()
+  for i in range(count):
+    word = xbox.read_u32(NV10_PGRAPH_RDI_DATA)
+    data += struct.pack("<L", word)
+  
+  #FIXME: Restore original RDI?
+  #FIXME: Assert the conditions from entry have not changed
+  return data
 
 kick_fifo_addr = None
 def kick_fifo_call(xbox, expected_put):
@@ -231,6 +245,9 @@ class Tracer():
         self.out("mem-2.bin", xbox.read(0x80000000 | color_offset, color_pitch * height))
       if depth_offset != 0x00000000:
         self.out("mem-3.bin", xbox.read(0x80000000 | depth_offset, depth_pitch * height))
+      self.out("pgraph-rdi-vp-instructions.bin", read_pgraph_rdi(xbox, 0x100000, 136 * 4))
+      self.out("pgraph-rdi-vp-constants0.bin", read_pgraph_rdi(xbox, 0x170000, 192 * 4))
+      self.out("pgraph-rdi-vp-constants1.bin", read_pgraph_rdi(xbox, 0xCC0000, 192 * 4))
 
     
 
