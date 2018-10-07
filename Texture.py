@@ -56,13 +56,16 @@ def decodeTexture(data, size, pitch, swizzled, bits_per_pixel, channel_sizes, ch
       pixels[x, y] = pixel_channels
 
   return img
-      
 
 def dumpTexture(xbox, offset, pitch, fmt_color, width, height):
   img = None
 
   # bits per pixel, channel sizes, channel offsets.
   # Right hand side is always in RGB or RGBA channel order.
+  Y8 = (8, (8, 8, 8), (0, 0, 0))
+  AY8 = (8, (8, 8, 8, 8), (0, 0, 0, 0))
+  A8 = (8, (0, 0, 0, 8), (0, 0, 0, 0))
+  A8Y8 = (16, (8, 8, 8, 8), (0, 0, 0, 8))
   R5G6B5 = (16, (5,6,5), (11, 5, 0))
   A4R4G4B4 = (16, (4,4,4,4), (8, 4, 0, 12))
   A1R5G5B5 = (16, (5,5,5,1), (10, 5, 0, 15))
@@ -70,7 +73,9 @@ def dumpTexture(xbox, offset, pitch, fmt_color, width, height):
   A8R8G8B8 = (32, (8,8,8,8), (16, 8, 0, 24))
   X8R8G8B8 = (32, (8,8,8), (16, 8, 0))
 
-  if fmt_color == 0x2: tex_info = (True, A1R5G5B5)
+  if fmt_color == 0x0: tex_info = (True, Y8)
+  elif fmt_color == 0x1: tex_info = (True, AY8)
+  elif fmt_color == 0x2: tex_info = (True, A1R5G5B5)
   elif fmt_color == 0x3: tex_info = (True, X1R5G5B5)
   elif fmt_color == 0x4: tex_info = (True, A4R4G4B4)
   elif fmt_color == 0x5: tex_info = (True, R5G6B5)
@@ -89,6 +94,8 @@ def dumpTexture(xbox, offset, pitch, fmt_color, width, height):
   elif fmt_color == 0x10: tex_info = (False, A1R5G5B5A5)
   elif fmt_color == 0x11: tex_info = (False, R5G6B5)
   elif fmt_color == 0x12: tex_info = (False, A8R8G8B8)
+  elif fmt_color == 0x19: tex_info = (True, A8)
+  elif fmt_color == 0x1A: tex_info = (True, A8Y8)
   elif fmt_color == 0x1C: tex_info = (False, X1R5G5B5)
   elif fmt_color == 0x1D: tex_info = (False, A4R4G4B4)
   elif fmt_color == 0x1E: tex_info = (False, X8R8G8B8)
