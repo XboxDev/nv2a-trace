@@ -79,13 +79,13 @@ def dumpTexture(xbox, offset, pitch, fmt_color, width, height):
   elif fmt_color == 0xB: pass #FIXME! Palette mode!
   elif fmt_color == 0xC: # DXT1
     data = xbox.read(0x80000000 | offset, width * height // 2)
-    img = Image.frombytes('RGB', img.size, data, 'bcn', 1) # DXT1
+    img = Image.frombytes('RGBA', (width, height), data, 'bcn', 1) # DXT1
   elif fmt_color == 0xE: # DXT3
     data = xbox.read(0x80000000 | offset, width * height * 1)
-    img = Image.frombytes('RGBA', img.size, data, 'bcn', 2) # DXT3
+    img = Image.frombytes('RGBA', (width, height), data, 'bcn', 2) # DXT3
   elif fmt_color == 0xF: # DXT5
     data = xbox.read(0x80000000 | offset, width * height * 1)
-    img = Image.frombytes('RGBA', img.size, data, 'bcn', 3) # DXT5
+    img = Image.frombytes('RGBA', (width, height), data, 'bcn', 3) # DXT5
   elif fmt_color == 0x10: tex_info = (False, A1R5G5B5A5)
   elif fmt_color == 0x11: tex_info = (False, R5G6B5)
   elif fmt_color == 0x12: tex_info = (False, A8R8G8B8)
