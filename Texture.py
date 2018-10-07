@@ -28,10 +28,7 @@ def decodeTexture(data, size, pitch, swizzled, bits_per_pixel, channel_sizes, ch
 
   #FIXME: Unswizzle data on the fly instead
   if swizzled:
-    if width == 640 and height <= 480 and pitch == 2560:
-      data = nv2a.Unswizzle(data, bits_per_pixel, (width, height), pitch)
-    else:
-      data = nv2a._Unswizzle(data, bits_per_pixel, (width, height), pitch)
+    data = nv2a.Unswizzle(data, bits_per_pixel, (width, height), pitch)
 
   pixels = img.load() # create the pixel map
 
