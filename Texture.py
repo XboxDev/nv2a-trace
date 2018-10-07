@@ -43,7 +43,16 @@ def decodeTexture(data, size, pitch, swizzled, bits_per_pixel, channel_sizes, ch
 
       pixel_channels = ()
       for channel_offset, channel_size in zip(channel_offsets, channel_sizes):
-        pixel_channels += (get_bits(pixel_bits, channel_offset, channel_size),)
+        channel_value = get_bits(pixel_bits, channel_offset, channel_size)
+
+        # Normalize channel
+        if channel_size > 0:
+          channel_value /= (1 << channel_size) - 1
+          channel_value = int(channel_value * 0xFF)
+        else:
+          channel_value = 0x00
+
+        pixel_channels += (channel_value,)
       pixels[x, y] = pixel_channels
 
   return img
