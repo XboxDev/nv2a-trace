@@ -120,9 +120,7 @@ def recordPGRAPHMethod(xbox, method, data):
           surface_type = xbox.read_u32(0xFD400710)
           swizzle_unk = xbox.read_u32(0xFD400818)
 
-          #FIXME: This does not seem to be a good field for this
-          #FIXME: Patched to give 50% of coolness
-          swizzled = commandCount & 1 #((surface_type & 3) == 1)
+          swizzled = ((surface_type & 3) == 2)
           #FIXME: if surface_type is 0, we probably can't even draw..
 
           color_fmt = (draw_format >> 12) & 0xF
