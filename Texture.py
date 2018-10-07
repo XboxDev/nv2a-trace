@@ -81,7 +81,7 @@ def dumpTexture(xbox, offset, pitch, fmt_color, width, height):
   elif fmt_color == 0x5: tex_info = (True, R5G6B5)
   elif fmt_color == 0x6: tex_info = (True, A8R8G8B8)
   elif fmt_color == 0x7: tex_info = (True, X8R8G8B8)
-  elif fmt_color == 0xB: pass #FIXME! Palette mode!
+  elif fmt_color == 0xB: img = Image.new('RGB', (width, height), (255, 0, 255, 255)) #FIXME! Palette mode!
   elif fmt_color == 0xC: # DXT1
     data = xbox.read(0x80000000 | offset, width * height // 2)
     img = Image.frombytes('RGBA', (width, height), data, 'bcn', 1) # DXT1
@@ -99,9 +99,9 @@ def dumpTexture(xbox, offset, pitch, fmt_color, width, height):
   elif fmt_color == 0x1C: tex_info = (False, X1R5G5B5)
   elif fmt_color == 0x1D: tex_info = (False, A4R4G4B4)
   elif fmt_color == 0x1E: tex_info = (False, X8R8G8B8)
-  elif fmt_color == 0x2E: pass #FIXME! Depth format
-  elif fmt_color == 0x30: pass #FIXME! Depth format
-  elif fmt_color == 0x31: pass #FIXME! Depth format
+  elif fmt_color == 0x2E: img = Image.new('RGB', (width, height), (255, 0, 255, 255)) #FIXME! Depth format
+  elif fmt_color == 0x30: img = Image.new('RGB', (width, height), (255, 0, 255, 255)) #FIXME! Depth format
+  elif fmt_color == 0x31: img = Image.new('RGB', (width, height), (255, 0, 255, 255)) #FIXME! Depth format
   else:
     raise Exception("Unknown texture format: 0x%X" % fmt_color)
 
