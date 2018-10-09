@@ -78,6 +78,14 @@ def dumpPGRAPH(xbox):
   assert(len(buffer) == 0x2000)
   return bytes(buffer)
 
+def dumpPFB(xbox):
+  buffer = bytearray([])
+  buffer.extend(xbox.read(0xFD100000, 0x1000))
+
+  # Return the PFB dump
+  assert(len(buffer) == 0x1000)
+  return bytes(buffer)
+
 
 
 
@@ -195,6 +203,20 @@ class Tracer():
    
 
 
+
+    # Dump stuff we might care about
+    if True:
+      def out(suffix, contents):
+        with open(("out/command%d_" % self.commandCount)+ suffix, "wb") as f:
+          f.write(contents)
+      out("pgraph.bin", dumpPGRAPH(xbox))
+      out("pfb.bin", dumpPFB(xbox))
+      if color_offset != 0x00000000:
+        out("mem-2.bin", xbox.read(0x80000000 | color_offset, color_pitch * height))
+      if depth_offset != 0x00000000:
+        out("mem-3.bin", xbox.read(0x80000000 | depth_offset, depth_pitch * height))
+
+    
 
 
     #FIXME: Respect anti-aliasing
