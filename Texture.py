@@ -57,6 +57,37 @@ def decodeTexture(data, size, pitch, swizzled, bits_per_pixel, channel_sizes, ch
 
   return img
 
+      
+def surface_color_format_to_texture_format(fmt, swizzled):
+  if fmt == 0x3: # ARGB1555
+    return 0x3 if swizzled else 0x1C
+  elif fmt == 0x5: # RGB565
+    return 0x5 if swizzled else 0x11
+  elif fmt == 0x7 or fmt == 0x8: # XRGB8888
+    return 0x7 if swizzled else 0x1E
+  elif fmt == 0xC: # ARGB8888
+    return 0x6 if swizzled else 0x12
+  else:
+    raise Exception("Unknown color fmt %d (0x%X) %s" % (fmt, fmt, "swizzled" if swizzled else "unswizzled"))
+    return None
+
+
+def surface_zeta_format_to_texture_format(fmt, swizzled, is_float):
+  if fmt == 0x1: # Z16
+    if is_float:
+      return 0x2D if swizzled else 0x31
+    else:
+      return 0x2C if swizzled else 0x30
+  elif fmt == 0x2: # Z24S8
+    if is_float:
+      return 0x2B if swizzled else 0x2F
+    else:
+      return 0x2A if swizzled else 0x2E
+  else:
+    raise Exception("Unknown zeta fmt %d (0x%X) %s %s" % (fmt, fmt, "float" if is_float else "fixed", "swizzled" if swizzled else "unswizzled"))
+    return None
+
+
 def dumpTexture(xbox, offset, pitch, fmt_color, width, height):
   img = None
 

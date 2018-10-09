@@ -150,15 +150,14 @@ class Tracer():
     if not PixelDumping:
       return []
     
-  #  offset = color_offset
-    pitch = xbox.read_u32(0xFD400858) # FIXME: Read from PGRAPH
-    #FIXME: Poor var names
+    color_pitch = xbox.read_u32(0xFD400858)
+    depth_pitch = xbox.read_u32(0xFD40085C)
 
-    surface_color_offset = xbox.read_u32(0xFD400828)
+    color_offset = xbox.read_u32(0xFD400828)
+    depth_offset = xbox.read_u32(0xFD40082C)
+
     surface_clip_x = xbox.read_u32(0xFD4019B4)
     surface_clip_y = xbox.read_u32(0xFD4019B8)
-
-    offset = surface_color_offset
 
     draw_format = xbox.read_u32(0xFD400804)
     surface_type = xbox.read_u32(0xFD400710)
@@ -166,39 +165,35 @@ class Tracer():
 
     swizzle_unk2 = xbox.read_u32(0xFD40086c)
 
-    width = (surface_clip_x >> 16) & 0xFFFF
-    height = (surface_clip_y >> 16) & 0xFFFF
+    clip_x = (surface_clip_x >> 0) & 0xFFFF
+    clip_y = (surface_clip_y >> 0) & 0xFFFF
+
+    clip_w = (surface_clip_x >> 16) & 0xFFFF
+    clip_h = (surface_clip_y >> 16) & 0xFFFF
+
+    surface_anti_aliasing = (surface_type >> 4) & 3
+
+    clip_x, clip_y = apply_anti_aliasing_factor(surface_anti_aliasing, clip_x, clip_y)
+    clip_w, clip_h = apply_anti_aliasing_factor(surface_anti_aliasing, clip_w, clip_h)
+
+    width = clip_x + clip_w
+    height = clip_y + clip_h
 
 
     #FIXME: 128 x 128 [pitch = 256 (0x100)], at 0x01AA8000 [PGRAPH: 0x01AA8000?], format 0x5, type: 0x21000002, swizzle: 0x7070000 [used 0]
 
     #FIXME: This does not seem to be a good field for this
     #FIXME: Patched to give 50% of coolness
-    swizzled = True #commandCount & 1 #((surface_type & 3) == 1)
+    swizzled = ((surface_type & 3) == 2)
     #FIXME: if surface_type is 0, we probably can't even draw..
 
+    format_color = (draw_format >> 12) & 0xF
+    format_depth = (draw_format >> 18) & 0x3
 
-    color_fmt = (draw_format >> 12) & 0xF
+    fmt_color = Texture.surface_color_format_to_texture_format(format_color, swizzled)
+    #fmt_depth = Texture.surface_zeta_format_to_texture_format(format_depth)
+   
 
-     #FIXME: Remove, dirty hack to speedup debugging
-    if color_fmt != 5:
-      #return []
-      pass
-    else:
-      #swizzled = False
-      pass
-
-
-    if color_fmt == 0x3: # ARGB1555
-      fmt_color = 0x3 if swizzled else 0x1C
-    elif color_fmt == 0x5: # RGB565
-      fmt_color = 0x5 if swizzled else 0x11
-    elif color_fmt == 0x7 or color_fmt == 0x8: # XRGB8888
-      fmt_color = 0x7 if swizzled else 0x1E
-    elif color_fmt == 0xC: # ARGB8888
-      fmt_color = 0x6 if swizzled else 0x12
-    else:
-      raise Exception("Oops! Unknown color fmt %d (0x%X)" % (color_fmt, color_fmt))
 
 
 
@@ -207,16 +202,20 @@ class Tracer():
     path = "command%d--color.png" % (self.commandCount)
     extraHTML = []
     extraHTML += ['<img height="128px" src="%s" alt="%s"/>' % (path, path)]
-    extraHTML += ['%d x %d [pitch = %d (0x%X)], at 0x%08X [PGRAPH: 0x%08X?], format 0x%X, type: 0x%X, swizzle: 0x%08X, 0x%08X [used %d]' % (width, height, pitch, pitch, offset, surface_color_offset, color_fmt, surface_type, swizzle_unk, swizzle_unk2, swizzled)]
+    extraHTML += ['%d x %d [pitch = %d (0x%X)], at 0x%08X, format 0x%X, type: 0x%X, swizzle: 0x%08X, 0x%08X [used %d]' % (width, height, color_pitch, color_pitch, color_offset, format_color, surface_type, swizzle_unk, swizzle_unk2, swizzled)]
     print(extraHTML[-1])
 
     try:
-      if offset == 0x00000000:
+      if color_offset == 0x00000000:
+        print("Color offset is null")
         raise Exception()
       else:
-        img = Texture.dumpTexture(xbox, offset, pitch, fmt_color, width, height)
+        print("Attempting to dump surface; swizzle: %s" % (str(swizzled)))
+        img = Texture.dumpTexture(xbox, color_offset, color_pitch, fmt_color, width, height)
     except:
       img = None
+      print("Failed to dump color surface")
+      traceback.print_exc()
 
     if img != None:
 
