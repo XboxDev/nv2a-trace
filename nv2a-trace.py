@@ -113,7 +113,8 @@ def main():
     print("@0x%08X; wants to be at 0x%08X" % (v_dma_get_addr, v_dma_put_addr_target))
 
     # Get size of current command.
-    v_dma_put_addr_target = xbox_helper.parseCommand(v_dma_get_addr, DebugPrint)
+    word = xbox.read_u32(0x80000000 | v_dma_get_addr)
+    v_dma_put_addr_target = parseCommand(v_dma_get_addr, word, DebugPrint)
 
     # If we don't know where this command ends, we have to abort.
     if v_dma_put_addr_target == 0:
