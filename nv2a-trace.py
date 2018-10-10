@@ -220,6 +220,7 @@ class Xbox:
   def __init__(self):
     self.read_u32 = read_u32
     self.read = read
+    self.write_u32 = write_u32
 xbox = Xbox()
 
 def main():
@@ -243,17 +244,17 @@ def main():
     enable_pgraph_fifo()
 
     # Check out where the PB currently is and where it was supposed to go.
-    v_dma_put_addr_real = read_u32(dma_put_addr)
-    v_dma_get_addr = read_u32(dma_get_addr)
+    v_dma_put_addr_real = xbox.read_u32(dma_put_addr)
+    v_dma_get_addr = xbox.read_u32(dma_get_addr)
 
     # Check if we have any methods left to run and skip those.
-    v_dma_state = read_u32(dma_state)
+    v_dma_state = xbox.read_u32(dma_state)
     v_dma_method_count = (v_dma_state >> 18) & 0x7ff
     v_dma_get_addr += v_dma_method_count * 4
 
     # Hide all commands from the PB by setting PUT = GET.
     v_dma_put_addr_target = v_dma_get_addr
-    write_u32(dma_put_addr, v_dma_put_addr_target)
+    xbox.write_u32(dma_put_addr, v_dma_put_addr_target)
 
     # Resume pusher - The PB can't run yet, as it has no commands to process.
     resume_fifo_pusher()
@@ -265,8 +266,8 @@ def main():
     # So we pause the pusher again to validate our state
     pause_fifo_pusher()
 
-    v_dma_put_addr_target_check = read_u32(dma_put_addr)
-    v_dma_get_addr_check = read_u32(dma_get_addr)
+    v_dma_put_addr_target_check = xbox.read_u32(dma_put_addr)
+    v_dma_get_addr_check = xbox.read_u32(dma_get_addr)
 
     # We want the PB to be paused
     if v_dma_get_addr_check != v_dma_put_addr_target_check:
@@ -298,7 +299,7 @@ def main():
       print("Aborting due to unknown PB command")
 
       # Recover the real address as Xbox would get stuck otherwise.
-      write_u32(dma_put_addr, v_dma_put_addr_real)
+      xbox.write_u32(dma_put_addr, v_dma_put_addr_real)
 
       break
 
@@ -319,25 +320,25 @@ def main():
       abortNow = True
 
     # Queue this command
-    write_u32(dma_put_addr, v_dma_put_addr_target)
+    xbox.write_u32(dma_put_addr, v_dma_put_addr_target)
 
     def JumpCheck(v_dma_put_addr_real):
       # See if the PB target was modified.
       # If necessary, we recover the current target to keep the GPU stuck on our
       # current command.
-      v_dma_put_addr_new_real = read_u32(dma_put_addr)
+      v_dma_put_addr_new_real = xbox.read_u32(dma_put_addr)
       if (v_dma_put_addr_new_real != v_dma_put_addr_target):
         print("PB was modified! Got 0x%08X, but expected: 0x%08X; Restoring." % (v_dma_put_addr_new_real, v_dma_put_addr_target))
         #FIXME: Ensure that the pusher is still disabled, or we might be
         #       screwed already. Because the pusher probably pushed new data
         #       to the CACHE which we attempt to avoid.
 
-        s1 = read_u32(put_state)
+        s1 = xbox.read_u32(put_state)
         if s1 & 1:
           print("PB was modified and pusher was already active!")
           time.sleep(60.0)
 
-        write_u32(dma_put_addr, v_dma_put_addr_target)
+        xbox.write_u32(dma_put_addr, v_dma_put_addr_target)
         v_dma_put_addr_real = v_dma_put_addr_new_real
       return v_dma_put_addr_real
 
@@ -368,7 +369,7 @@ def main():
       enable_pgraph_fifo()
 
       # Get the updated PB address.
-      v_dma_get_addr = read_u32(dma_get_addr)
+      v_dma_get_addr = xbox.read_u32(dma_get_addr)
 
     # It's possible that the CPU updated the PUT after execution
     v_dma_put_addr_real = JumpCheck(v_dma_put_addr_real)
@@ -378,7 +379,7 @@ def main():
 
     # Check if the user wants to exit
     if abortNow:
-      write_u32(dma_put_addr, v_dma_put_addr_real)
+      xbox.write_u32(dma_put_addr, v_dma_put_addr_real)
       break
 
   print("\n\nFinished PB\n\n")
