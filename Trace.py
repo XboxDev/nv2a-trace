@@ -197,6 +197,13 @@ class Tracer():
     color_offset = xbox.read_u32(0xFD400828)
     depth_offset = xbox.read_u32(0xFD40082C)
 
+    color_base = xbox.read_u32(0xFD400840)
+    depth_base = xbox.read_u32(0xFD400844)
+
+    #FIXME: Is this correct? pbkit uses _base, but D3D seems to use _offset?
+    color_offset += color_base
+    depth_offset += depth_base
+
     surface_clip_x = xbox.read_u32(0xFD4019B4)
     surface_clip_y = xbox.read_u32(0xFD4019B8)
 
