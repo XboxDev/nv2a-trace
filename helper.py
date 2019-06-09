@@ -17,23 +17,16 @@ def parseCommand(addr, word, display=False):
   s = "0x%08X: Opcode: 0x%08X" % (addr, word)
 
   if ((word & 0xe0000003) == 0x20000000):
-    print("old jump")
     #state->get_jmp_shadow = control->dma_get;
     #NV2A_DPRINTF("pb OLD_JMP 0x%" HWADDR_PRIx "\n", control->dma_get);
-    addr = word & 0x1fffffff
+    addr = word & 0x1ffffffc
+    print(s + "; old jump 0x%08X" % addr)
   elif ((word & 3) == 1):
     addr = word & 0xfffffffc
-    print("jump 0x%08X" % addr)
+    print(s + "; jump 0x%08X" % addr)
     #state->get_jmp_shadow = control->dma_get;
-
-    if False:
-      # Get the address after the first instruction after a jump?
-      # This is a hack, because it seems that the NV2A refuses to jump if there
-      # is no room for a real method
-      assert(False)
-
   elif ((word & 3) == 2):
-    print("unhandled opcode type: call")
+    print(s + "; unhandled opcode type: call")
     #if (state->subroutine_active) {
     #  state->error = NV_PFIFO_CACHE1_DMA_STATE_ERROR_CALL;
     #  break;
@@ -44,7 +37,7 @@ def parseCommand(addr, word, display=False):
     addr = 0
   elif (word == 0x00020000):
     # return
-    print("unhandled opcode type: return")
+    print(s + "; unhandled opcode type: return")
     addr = 0
   elif ((word & 0xe0030003) == 0) or ((word & 0xe0030003) == 0x40000000):
     # methods
@@ -53,15 +46,12 @@ def parseCommand(addr, word, display=False):
     method_count = (word >> 18) & 0x7ff;
     method_nonincreasing = word & 0x40000000;
     #state->dcount = 0;
-
-    s += "; Method: 0x%04X (%d times)" % (method, method_count)
+    if display:
+      print(s + "; Method: 0x%04X (%d times)" % (method, method_count))
     addr += 4 + method_count * 4
 
   else:
-    print("unknown opcode type")
-
-  if display:
-    print(s)
+    print(s + "; unknown opcode type")
 
   return addr
 
