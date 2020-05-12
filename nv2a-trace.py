@@ -155,6 +155,12 @@ def main():
   # Create a new trace object
   trace = Trace.Tracer(v_dma_get_addr, v_dma_put_addr_real)
 
+
+  # Record initial state
+  trace.commandCount = -1
+  trace.DumpSurfaces(xbox, None)
+  trace.commandCount = 0
+
   # Step through the PB until we abort
   while not abortNow:
 
