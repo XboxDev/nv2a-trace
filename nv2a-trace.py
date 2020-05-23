@@ -99,12 +99,12 @@ def main():
 
     # We want the PB to be paused
     if v_dma_get_addr_check != v_dma_put_addr_target_check:
-      print("Oops GET did not reach PUT!")
+      print("Oops GET (0x%08X) did not reach PUT (0x%08X)!" % (v_dma_get_addr_check, v_dma_put_addr_target_check))
       continue
 
     # Ensure that we are at the correct offset
     if v_dma_put_addr_target_check != v_dma_put_addr_target:
-      print("Oops PUT was modified!")
+      print("Oops PUT was modified; got 0x%08X but expected 0x%08X!" % (v_dma_put_addr_target_check, v_dma_put_addr_target))
       continue
 
     break
