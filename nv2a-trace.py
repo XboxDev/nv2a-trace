@@ -1,26 +1,17 @@
 #!/usr/bin/env python3
 
 from xboxpy import *
-
 from helper import *
+from helper import *
+import Trace
 
-# Create output folder
+import argparse
 import os
-try:
-  os.mkdir("out")
-except:
-  pass
-
 import time
 import signal
 import sys
 import struct
 import traceback
-
-from helper import *
-
-import Trace
-
 
 abortNow = False
 
@@ -50,8 +41,26 @@ xbox = Xbox()
 
 xbox_helper = XboxHelper(xbox)
 
-def main():
+def main(args):
 
+  # Create output folder
+  try:
+    os.mkdir(args.out)
+    Trace.OutputDir = args.out
+  except FileExistsError:
+    pass
+  
+  if args.no_surface:
+    Trace.SurfaceDumping = False
+
+  if args.no_texture:
+    Trace.TextureDumping = False
+
+  if args.no_pixel:
+    Trace.PixelDumping = False
+
+  Trace.MaxFrames = args.max_flip
+    
   global abortNow
 
   print("\n\nSearching stable PB state\n\n")
@@ -197,6 +206,9 @@ def main():
           xbox_helper.dumpPBState()
           raise
 
+    except Trace.MaxFlipExceeded:
+      print("Max flip count reached")
+      abortNow = True
     except:
       traceback.print_exc()
       abortNow = True
@@ -218,5 +230,47 @@ def main():
   
   print("Recorded %d flip stalls and %d PB commands (%.2f commands / second)" % (flipStallCount, commandCount, commandCount / duration))
 
+  
 if __name__ == '__main__':
-  main()
+  def _parse_args():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+      "-o",
+      "--out",
+      metavar="path",
+      default="out",
+      help="Set the output directory."
+    )
+    
+    parser.add_argument(
+      "--no-surface",
+      help="Disable dumping of surfaces.",
+      action='store_true'
+    )
+
+    parser.add_argument(
+      "--no-texture",
+      help="Disable dumping of textures.",
+      action='store_true'
+    )
+
+    parser.add_argument(
+      "--no-pixel",
+      help="Disable dumping of all graphical resources (surfaces, textures).",
+      action='store_true'
+    )
+
+    parser.add_argument(
+      "--max-flip",
+      metavar='frames',
+      default=0,
+      type=int,
+      help="Exit tracing after the given number of frame swaps."
+    )
+
+    return parser.parse_args()
+  
+  sys.exit(main(_parse_args()))
+
+  

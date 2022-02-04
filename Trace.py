@@ -7,10 +7,16 @@ import Texture
 
 from helper import *
 
+OutputDir = "out"
 PixelDumping = True
+TextureDumping = True
+SurfaceDumping = True
 DebugPrint = False
+MaxFrames = 0
+class MaxFlipExceeded(Exception):
+  pass
 
-debugLog = os.path.join("out", "debug.html")
+debugLog = os.path.join(OutputDir, "debug.html")
 def addHTML(xx):
   f = open(debugLog,"a")
   f.write("<tr>")
@@ -125,7 +131,8 @@ def kick_fifo(xbox, expected_put):
 class Tracer():
 
   def out(self, suffix, contents):
-    with open(("out/command%d_" % self.commandCount)+ suffix, "wb") as f:
+    out_path = os.path.join(OutputDir, "command%d_" % self.commandCount) + suffix
+    with open(out_path, "wb") as f:
       f.write(contents)
 
 
@@ -155,7 +162,8 @@ class Tracer():
 
   def DumpTextures(self, xbox, data, *args):
     global PixelDumping
-    if not PixelDumping:
+    global TextureDumping
+    if not PixelDumping or not TextureDumping:
       return []
 
     extraHTML = []
@@ -181,14 +189,15 @@ class Tracer():
       img = Texture.dumpTexture(xbox, offset, pitch, fmt_color, width, height)
 
       if img != None:
-        img.save(os.path.join("out", path))
+        img.save(os.path.join(OutputDir, path))
       extraHTML += ['<img height="128px" src="%s" alt="%s"/>' % (path, path)]
 
     return extraHTML
 
   def DumpSurfaces(self, xbox, data, *args):
     global PixelDumping
-    if not PixelDumping:
+    global SurfaceDumping
+    if not PixelDumping or not SurfaceDumping:
       return []
     
     color_pitch = xbox.read_u32(0xFD400858)
@@ -285,7 +294,7 @@ class Tracer():
       if True:
         img = img.convert('RGB')
 
-      img.save(os.path.join("out", path))
+      img.save(os.path.join(OutputDir, path))
 
     return extraHTML
 
@@ -455,6 +464,9 @@ class Tracer():
   def HandleFlipStall(self, xbox, data, *args):
     print("Flip (Stall)")
     self.flipStallCount += 1
+
+    if MaxFrames and self.flipStallCount >= MaxFrames:
+      raise MaxFlipExceeded()
     return []
 
   def HandleSetTexture(self, xbox, data, *args):
