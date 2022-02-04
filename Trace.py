@@ -471,9 +471,14 @@ class Tracer():
     return [], []
 
   def recordPGRAPHMethod(self, xbox, method_info, data, pre_info, post_info):
-    dataf = struct.unpack("<f", struct.pack("<L", data))[0]
+    if data is not None:
+      dataf = struct.unpack("<f", struct.pack("<L", data))[0]
 
-    _addHTML(["", "0x%08X" % method_info['address'], "0x%04X" % method_info['method'], "0x%08X / %f" % (data, dataf)] + pre_info + post_info)
+      _addHTML(["", "0x%08X" % method_info['address'], "0x%04X" % method_info['method'], "0x%08X / %f" % (data, dataf)] + pre_info + post_info)
+    else:
+      _addHTML(["", "0x%08X" % method_info['address'], "0x%04X" % method_info['method'], "<No data>"] + pre_info + post_info)      
+
+
 
   def WritePUT(self, xbox, target):
 
@@ -562,19 +567,23 @@ class Tracer():
       method_count = (word >> 18) & 0x7ff;
       method_nonincreasing = word & 0x40000000;
 
-      # Download this command from Xbox
-      #FIXME: Halo: CE has cases where method_count is 0?!
-      command = xbox.read(0x80000000 | (get_addr + 4), method_count * 4)
-      
-      #FIXME: Unpack all of them?
-      data = struct.unpack("<%dL" % method_count, command)
-      assert(len(data) == method_count)
-
       method_info = {}
       method_info['address'] = get_addr
       method_info['method'] = method
       method_info['nonincreasing'] = method_nonincreasing
       method_info['subchannel'] = subchannel
+
+      # Download this command from Xbox
+      if (method_count == 0):
+        # Halo: CE has cases where method_count is 0?!
+        html_print("Warning: Command 0x%X with method_count == 0\n" % method)
+        data = []
+      else:
+        command = xbox.read(0x80000000 | (get_addr + 4), method_count * 4)
+
+        #FIXME: Unpack all of them?
+        data = struct.unpack("<%dL" % method_count, command)
+        assert(len(data) == method_count)
       method_info['data'] = data
     else:
       method_info = None
@@ -611,7 +620,10 @@ class Tracer():
       if not method_info['nonincreasing']:
         method_info['method'] += 4
 
-    #FIXME: Is this necessary? are dicts passed by value in python?
+    # Handle special case from Halo: CE where there are commands with no data.
+    if not method_info['data']:
+      self.recordPGRAPHMethod(xbox, method_info, None, pre_info, post_info)
+
     method_info['method'] = orig_method
 
     self.commandCount += 1
