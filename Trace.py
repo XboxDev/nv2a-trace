@@ -8,14 +8,22 @@ import Texture
 
 from helper import *
 
+OutputDir = "out"
 PixelDumping = True
+TextureDumping = True
+SurfaceDumping = True
 DebugPrint = False
+MaxFrames = 0
+class MaxFlipExceeded(Exception):
+  pass
+
 
 pgraph_dump = None
 exchange_u32_addr = None
 kick_fifo_addr = None
+debugLog = os.path.join(OutputDir, "debug.html")
 
-debugLog = os.path.join("out", "debug.html")
+
 def _addHTML(xx):
   f = open(debugLog,"a")
   f.write("<tr>")
@@ -115,9 +123,10 @@ def _kickFifo(xbox, expected_put):
 
 class Tracer():
 
-  def __init__(self, dma_get_addr, dma_put_addr):
-    self.flipStallCount = 0
-    self.commandCount = 0
+  def out(self, suffix, contents):
+    out_path = os.path.join(OutputDir, "command%d_" % self.commandCount) + suffix
+    with open(out_path, "wb") as f:
+      f.write(contents)
 
     self.real_dma_get_addr = dma_get_addr
     self.real_dma_put_addr = dma_put_addr
@@ -138,7 +147,8 @@ class Tracer():
     self.methodHooks(0x97, 0x1D70, [],                 [self.DumpSurfaces])    # BACK_END_WRITE_SEMAPHORE_RELEASE
 
   def out(self, suffix, contents):
-    with open(("out/command%d_" % self.commandCount)+ suffix, "wb") as f:
+    out_path = os.path.join(OutputDir, "command%d_" % self.commandCount) + suffix
+    with open(out_path, "wb") as f:
       f.write(contents)
 
   #FIXME: Maybe take a list of vertices?
@@ -153,7 +163,8 @@ class Tracer():
 
   def DumpTextures(self, xbox, data, *args):
     global PixelDumping
-    if not PixelDumping:
+    global TextureDumping
+    if not PixelDumping or not TextureDumping:
       return []
 
     extraHTML = []
@@ -179,14 +190,15 @@ class Tracer():
       img = Texture.dumpTexture(xbox, offset, pitch, fmt_color, width, height)
 
       if img != None:
-        img.save(os.path.join("out", path))
+        img.save(os.path.join(OutputDir, path))
       extraHTML += ['<img height="128px" src="%s" alt="%s"/>' % (path, path)]
 
     return extraHTML
 
   def DumpSurfaces(self, xbox, data, *args):
     global PixelDumping
-    if not PixelDumping:
+    global SurfaceDumping
+    if not PixelDumping or not SurfaceDumping:
       return []
     
     color_pitch = xbox.read_u32(0xFD400858)
@@ -276,7 +288,7 @@ class Tracer():
       if True:
         img = img.convert('RGB')
 
-      img.save(os.path.join("out", path))
+      img.save(os.path.join(OutputDir, path))
 
     return extraHTML
 
@@ -443,6 +455,9 @@ class Tracer():
   def HandleFlipStall(self, xbox, data, *args):
     print("Flip (Stall)")
     self.flipStallCount += 1
+
+    if MaxFrames and self.flipStallCount >= MaxFrames:
+      raise MaxFlipExceeded()
     return []
 
   def HandleSetTexture(self, xbox, data, *args):
