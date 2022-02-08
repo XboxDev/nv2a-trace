@@ -55,4 +55,3 @@ If this tool does not work, please retry a couple of times.
 
 **(C) 2018 XboxDev maintainers**
 
-All rights reserved.
