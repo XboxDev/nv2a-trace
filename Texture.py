@@ -2,10 +2,25 @@
 
 from xboxpy import nv2a
 
-import struct
+from collections import namedtuple
 from PIL import Image
 
-def decodeTexture(data, size, pitch, swizzled, bits_per_pixel, channel_sizes, channel_offsets):
+# Right hand side is always in RGB or RGBA channel order.
+TextureDescription = namedtuple("TextureDescription",
+                                ["bpp", "channel_bpps", "channel_offsets"])
+Y8 = TextureDescription(8, (8, 8, 8), (0, 0, 0))
+AY8 = TextureDescription(8, (8, 8, 8, 8), (0, 0, 0, 0))
+A8 = TextureDescription(8, (0, 0, 0, 8), (0, 0, 0, 0))
+A8Y8 = TextureDescription(16, (8, 8, 8, 8), (0, 0, 0, 8))
+R5G6B5 = TextureDescription(16, (5,6,5), (11, 5, 0))
+A4R4G4B4 = TextureDescription(16, (4,4,4,4), (8, 4, 0, 12))
+A1R5G5B5 = TextureDescription(16, (5,5,5,1), (10, 5, 0, 15))
+X1R5G5B5 = TextureDescription(16, (5,5,5), (10, 5, 0))
+A8R8G8B8 = TextureDescription(32, (8,8,8,8), (16, 8, 0, 24))
+X8R8G8B8 = TextureDescription(32, (8,8,8), (16, 8, 0))
+
+def _decodeTexture(data, size, pitch, swizzled, bits_per_pixel, channel_sizes, channel_offsets):
+  """Convert the given texture data into a PIL.Image."""
 
   # Check argument sanity
   assert(len(size) == 2) #FIXME: Support 1D and 3D?
@@ -23,6 +38,8 @@ def decodeTexture(data, size, pitch, swizzled, bits_per_pixel, channel_sizes, ch
     mode = 'RGB'
   elif (len(channel_sizes) == 4):
     mode = 'RGBA'
+  else:
+    raise Exception("Unsupported channel_sizes %d" % len(channel_sizes))
 
   img = Image.new(mode, (width, height))
 
@@ -58,7 +75,8 @@ def decodeTexture(data, size, pitch, swizzled, bits_per_pixel, channel_sizes, ch
   return img
 
       
-def surface_color_format_to_texture_format(fmt, swizzled):
+def surfaceColorFormatToTextureFormat(fmt, swizzled):
+  """Convert nv2a draw format to the equivalent Texture format."""
   if fmt == 0x3: # ARGB1555
     return 0x3 if swizzled else 0x1C
   elif fmt == 0x5: # RGB565
@@ -69,10 +87,10 @@ def surface_color_format_to_texture_format(fmt, swizzled):
     return 0x6 if swizzled else 0x12
   else:
     raise Exception("Unknown color fmt %d (0x%X) %s" % (fmt, fmt, "swizzled" if swizzled else "unswizzled"))
-    return None
 
 
-def surface_zeta_format_to_texture_format(fmt, swizzled, is_float):
+def surfaceZetaFormatToTextureFormat(fmt, swizzled, is_float):
+  """Convert nv2a zeta format to the equivalent Texture format."""
   if fmt == 0x1: # Z16
     if is_float:
       return 0x2D if swizzled else 0x31
@@ -85,24 +103,11 @@ def surface_zeta_format_to_texture_format(fmt, swizzled, is_float):
       return 0x2A if swizzled else 0x2E
   else:
     raise Exception("Unknown zeta fmt %d (0x%X) %s %s" % (fmt, fmt, "float" if is_float else "fixed", "swizzled" if swizzled else "unswizzled"))
-    return None
 
 
 def dumpTexture(xbox, offset, pitch, fmt_color, width, height):
+  """Convert the texture at the given offset into a PIL.Image."""
   img = None
-
-  # bits per pixel, channel sizes, channel offsets.
-  # Right hand side is always in RGB or RGBA channel order.
-  Y8 = (8, (8, 8, 8), (0, 0, 0))
-  AY8 = (8, (8, 8, 8, 8), (0, 0, 0, 0))
-  A8 = (8, (0, 0, 0, 8), (0, 0, 0, 0))
-  A8Y8 = (16, (8, 8, 8, 8), (0, 0, 0, 8))
-  R5G6B5 = (16, (5,6,5), (11, 5, 0))
-  A4R4G4B4 = (16, (4,4,4,4), (8, 4, 0, 12))
-  A1R5G5B5 = (16, (5,5,5,1), (10, 5, 0, 15))
-  X1R5G5B5 = (16, (5,5,5), (10, 5, 0))
-  A8R8G8B8 = (32, (8,8,8,8), (16, 8, 0, 24))
-  X8R8G8B8 = (32, (8,8,8), (16, 8, 0))
 
   if fmt_color == 0x0: tex_info = (True, Y8)
   elif fmt_color == 0x1: tex_info = (True, AY8)
@@ -122,7 +127,7 @@ def dumpTexture(xbox, offset, pitch, fmt_color, width, height):
   elif fmt_color == 0xF: # DXT5
     data = xbox.read(0x80000000 | offset, width * height * 1)
     img = Image.frombytes('RGBA', (width, height), data, 'bcn', 3) # DXT5
-  elif fmt_color == 0x10: tex_info = (False, A1R5G5B5A5)
+  elif fmt_color == 0x10: tex_info = (False, A1R5G5B5)
   elif fmt_color == 0x11: tex_info = (False, R5G6B5)
   elif fmt_color == 0x12: tex_info = (False, A8R8G8B8)
   elif fmt_color == 0x19: tex_info = (True, A8)
@@ -151,7 +156,7 @@ def dumpTexture(xbox, offset, pitch, fmt_color, width, height):
 
     #FIXME: Might want to skip the empty area if pitch and width diverge?
     data = xbox.read(0x80000000 | offset, pitch * height)
-    img = decodeTexture(data, (width, height), pitch, swizzled, bits_per_pixel, channel_sizes, channel_offsets)
+    img = _decodeTexture(data, (width, height), pitch, swizzled, bits_per_pixel, channel_sizes, channel_offsets)
 
   return img
     
