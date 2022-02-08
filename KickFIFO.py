@@ -30,11 +30,12 @@ class _KickFIFO:
         self._install_kicker(xbox)
         eax = xbox.call(self.kick_fifo_addr, struct.pack("<L", expected_put))["eax"]
         assert eax != 0xBADBAD
+        return eax == 0x1337C0DE
 
 
 _kicker = _KickFIFO()
 
 
 def kick(xbox, expected_put):
-    """Calls the kicker with the given argument."""
-    _kicker.call(xbox, expected_put)
+    """Calls the kicker with the given argument. Returns true if successful."""
+    return _kicker.call(xbox, expected_put)

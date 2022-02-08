@@ -123,7 +123,7 @@ def _run(xbox, xbox_helper, v_dma_get_addr, trace):
     while not abort_now:
         try:
             v_dma_get_addr, unprocessed_bytes = trace.process_push_buffer_command(
-                xbox, xbox_helper, v_dma_get_addr
+                v_dma_get_addr
             )
             bytes_queued += unprocessed_bytes
 
@@ -132,12 +132,15 @@ def _run(xbox, xbox_helper, v_dma_get_addr, trace):
             # Avoid queuing up too many bytes: while the buffer is being processed,
             # D3D might fixup the buffer if GET is still too far away.
             if v_dma_get_addr == trace.real_dma_put_addr or bytes_queued >= 200:
-                print("Flushing buffer until (0x%08X)" % v_dma_get_addr)
-                trace.run_fifo(xbox, xbox_helper, v_dma_get_addr)
+                print(
+                    "Flushing buffer until (0x%08X): real_put 0x%X; bytes_queued: %d"
+                    % (v_dma_get_addr, trace.real_dma_put_addr, bytes_queued)
+                )
+                trace.run_fifo(v_dma_get_addr)
                 bytes_queued = 0
 
             if v_dma_get_addr == trace.real_dma_put_addr:
-                print("Reached end of buffer?!")
+                print("Reached end of buffer with %d bytes queued?!" % bytes_queued)
                 # break
 
             # Verify we are where we think we are
@@ -222,7 +225,7 @@ def main(args):
     xbox = Xbox()
     xbox_helper = XboxHelper.XboxHelper(xbox)
 
-    print("\n\nSearching stable PB state\n\n")
+    print("\n\nAwaiting stable PB state\n\n")
     v_dma_get_addr, v_dma_put_addr_real = _wait_for_stable_push_buffer_state(
         xbox, xbox_helper
     )
@@ -242,7 +245,7 @@ def main(args):
         experimental_disable_z_compression_and_tiling(xbox)
 
     # Create a new trace object
-    trace = Trace.Tracer(v_dma_get_addr, v_dma_put_addr_real)
+    trace = Trace.Tracer(v_dma_get_addr, v_dma_put_addr_real, xbox, xbox_helper)
 
     # Dump the initial state
     trace.command_count = -1

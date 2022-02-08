@@ -11,6 +11,7 @@
 # pylint: disable=too-many-statements
 
 import atexit
+from collections import defaultdict
 import os
 import struct
 import time
@@ -41,6 +42,7 @@ exchange_u32_addr = None
 
 
 def _exchange_u32(xbox, address, value):
+    """Exchanges `value` with the value at `address`, returning the original value."""
     global exchange_u32_addr
     if exchange_u32_addr is None:
         with open("exchange_u32", "rb") as infile:
@@ -152,8 +154,13 @@ class NV2ALog:
         """Append a line describing the given pgraph call to the nv2a log."""
         with open(self.path, "a", encoding="utf8") as logfile:
             logfile.write(
-                "nv2a: pgraph method (%d): 0x97 -> 0x%x (0x%x)\n"
-                % (method_info["subchannel"], method_info["method"], data)
+                "nv2a: pgraph method (%d): 0x%x -> 0x%x (0x%x)\n"
+                % (
+                    method_info["subchannel"],
+                    method_info["object"],
+                    method_info["method"],
+                    data,
+                )
             )
 
             if Nv2aLogMethodDetails:
@@ -172,7 +179,9 @@ class NV2ALog:
 class Tracer:
     """Performs tracing of the xbox nv2a state."""
 
-    def __init__(self, dma_get_addr, dma_put_addr):
+    def __init__(self, dma_get_addr, dma_put_addr, xbox, xbox_helper):
+        self.xbox = xbox
+        self.xbox_helper = xbox_helper
         self.html_log = HTMLLog(os.path.join(OutputDir, "debug.html"))
         self.nv2a_log = NV2ALog(os.path.join(OutputDir, "nv2a_log.txt"))
         self.flip_stall_count = 0
@@ -184,14 +193,14 @@ class Tracer:
 
         self.pgraph_dump = None
 
-        self.method_callbacks = {}
+        # Maps {object : {method: ([pre_call_hooks], [post_call_hooks])} }
+        self.method_callbacks = defaultdict(dict)
         self._hook_methods()
 
-    def hook_method(self, _obj, method, pre_hooks, post_hooks):
+    def hook_method(self, obj, method, pre_hooks, post_hooks):
         """Registers pre- and post-run hooks for the given method."""
-        # TODO: Respect object parameter.
-        print("Registering method hook for 0x%04X" % method)
-        self.method_callbacks[method] = pre_hooks, post_hooks
+        print("Registering method hook for 0x%X::0x%04X" % (obj, method))
+        self.method_callbacks[obj][method] = pre_hooks, post_hooks
 
     @property
     def recorded_flip_stall_count(self):
@@ -201,12 +210,12 @@ class Tracer:
     def recorded_command_count(self):
         return self.command_count
 
-    def run_fifo(self, xbox, xbox_helper, put_target):
+    def run_fifo(self, put_target):
         # Queue the commands
-        self._write_put(xbox, put_target)
+        self._write_put(put_target)
 
         # FIXME: we can avoid this read in some cases, as we should know where we are
-        self.real_dma_get_addr = xbox.read_u32(XboxHelper.DMA_GET_ADDR)
+        self.real_dma_get_addr = self.xbox.read_u32(XboxHelper.DMA_GET_ADDR)
 
         self.html_log.log(
             [
@@ -221,7 +230,15 @@ class Tracer:
         # So we have to process it chunk by chunk.
         # FIXME: This used to be a check which made sure that `v_dma_get_addr` did
         #       never leave the known PB.
+        iterations_with_no_change = 0
         while self.real_dma_get_addr != put_target:
+            if iterations_with_no_change and not iterations_with_no_change % 1000:
+                print(
+                    "Warning: went %d iterations with no change to DMA_GET_ADDR 0x%X "
+                    " target 0x%X"
+                    % (iterations_with_no_change, self.real_dma_get_addr, put_target)
+                )
+
             if DebugPrint:
                 print(
                     "At 0x%08X, target is 0x%08X (Real: 0x%08X)"
@@ -229,29 +246,36 @@ class Tracer:
                 )
 
             # Disable PGRAPH, so it can't run anything from CACHE.
-            xbox_helper.disable_pgraph_fifo()
-            xbox_helper.wait_until_pgraph_idle()
+            self.xbox_helper.disable_pgraph_fifo()
+            self.xbox_helper.wait_until_pgraph_idle()
 
             # This scope should be atomic.
-            # Avoid running bad code, if the PUT was modified sometime during
+            # FIXME: Avoid running bad code, if the PUT was modified sometime during
             # this command.
-            self._write_put(xbox, self.target_dma_put_addr)
+            self._write_put(self.target_dma_put_addr)
 
             # Kick commands into CACHE.
-            KickFIFO.kick(xbox, self.target_dma_put_addr)
+            kicked = KickFIFO.kick(self.xbox, self.target_dma_put_addr)
+            if not kicked:
+                print("Warning: FIFO kick failed")
 
             # print("PUT STATE 0x%08X" % xbox.read_u32(0xFD003220))
 
             # Run the commands we have moved to CACHE, by enabling PGRAPH.
-            xbox_helper.enable_pgraph_fifo()
+            self.xbox_helper.enable_pgraph_fifo()
 
             # Get the updated PB address.
-            self.real_dma_get_addr = xbox.read_u32(XboxHelper.DMA_GET_ADDR)
+            new_get_addr = self.xbox.read_u32(XboxHelper.DMA_GET_ADDR)
+            if new_get_addr == self.real_dma_get_addr:
+                iterations_with_no_change += 1
+            else:
+                self.real_dma_get_addr = new_get_addr
+                iterations_with_no_change = 0
 
         # This is just to confirm that nothing was modified in the final chunk
-        self._write_put(xbox, self.target_dma_put_addr)
+        self._write_put(self.target_dma_put_addr)
 
-    def dump_textures(self, xbox, data, *args):
+    def dump_textures(self, data, *args):
         if not PixelDumping or not TextureDumping:
             return []
 
@@ -260,11 +284,9 @@ class Tracer:
         for i in range(4):
             path = "command%d--tex_%d.png" % (self.command_count, i)
 
-            offset = xbox.read_u32(0xFD401A24 + i * 4)  # NV_PGRAPH_TEXOFFSET0
-            pitch = (
-                0  # xbox.read_u32(0xFD4019DC + i * 4) # NV_PGRAPH_TEXCTL1_0_IMAGE_PITCH
-            )
-            fmt = xbox.read_u32(0xFD401A04 + i * 4)  # NV_PGRAPH_TEXFMT0
+            offset = self.xbox.read_u32(0xFD401A24 + i * 4)  # NV_PGRAPH_TEXOFFSET0
+            pitch = 0  # self.xbox.read_u32(0xFD4019DC + i * 4) # NV_PGRAPH_TEXCTL1_0_IMAGE_PITCH
+            fmt = self.xbox.read_u32(0xFD401A04 + i * 4)  # NV_PGRAPH_TEXFMT0
             fmt_color = (fmt >> 8) & 0x7F
             width_shift = (fmt >> 20) & 0xF
             height_shift = (fmt >> 24) & 0xF
@@ -277,7 +299,9 @@ class Tracer:
                 "Texture %d [0x%08X, %d x %d (pitch: 0x%X), format 0x%X]"
                 % (i, offset, width, height, pitch, fmt_color)
             )
-            img = Texture.dump_texture(xbox, offset, pitch, fmt_color, width, height)
+            img = Texture.dump_texture(
+                self.xbox, offset, pitch, fmt_color, width, height
+            )
 
             if img:
                 img.save(os.path.join(OutputDir, path))
@@ -285,31 +309,31 @@ class Tracer:
 
         return extra_html
 
-    def dump_surfaces(self, xbox, data, *args):
+    def dump_surfaces(self, data, *args):
         if not PixelDumping or not SurfaceDumping:
             return []
 
-        color_pitch = xbox.read_u32(0xFD400858)
-        depth_pitch = xbox.read_u32(0xFD40085C)
+        color_pitch = self.xbox.read_u32(0xFD400858)
+        depth_pitch = self.xbox.read_u32(0xFD40085C)
 
-        color_offset = xbox.read_u32(0xFD400828)
-        depth_offset = xbox.read_u32(0xFD40082C)
+        color_offset = self.xbox.read_u32(0xFD400828)
+        depth_offset = self.xbox.read_u32(0xFD40082C)
 
-        color_base = xbox.read_u32(0xFD400840)
-        depth_base = xbox.read_u32(0xFD400844)
+        color_base = self.xbox.read_u32(0xFD400840)
+        depth_base = self.xbox.read_u32(0xFD400844)
 
         # FIXME: Is this correct? pbkit uses _base, but D3D seems to use _offset?
         color_offset += color_base
         depth_offset += depth_base
 
-        surface_clip_x = xbox.read_u32(0xFD4019B4)
-        surface_clip_y = xbox.read_u32(0xFD4019B8)
+        surface_clip_x = self.xbox.read_u32(0xFD4019B4)
+        surface_clip_y = self.xbox.read_u32(0xFD4019B8)
 
-        draw_format = xbox.read_u32(0xFD400804)
-        surface_type = xbox.read_u32(0xFD400710)
-        swizzle_unk = xbox.read_u32(0xFD400818)
+        draw_format = self.xbox.read_u32(0xFD400804)
+        surface_type = self.xbox.read_u32(0xFD400710)
+        swizzle_unk = self.xbox.read_u32(0xFD400818)
 
-        swizzle_unk2 = xbox.read_u32(0xFD40086C)
+        swizzle_unk2 = self.xbox.read_u32(0xFD40086C)
 
         clip_x = (surface_clip_x >> 0) & 0xFFFF
         clip_y = (surface_clip_y >> 0) & 0xFFFF
@@ -340,35 +364,39 @@ class Tracer:
         # FIXME: Support 3D surfaces.
         format_depth = (draw_format >> 18) & 0x3
 
+        if not format_color:
+            print("Warning: Invalid color format, skipping surface dump.")
+            return []
+
         fmt_color = Texture.surface_color_format_to_texture_format(
             format_color, swizzled
         )
         # fmt_depth = Texture.surface_zeta_format_to_texture_format(format_depth)
 
         # Dump stuff we might care about
-        self._write("pgraph.bin", _dump_pgraph(xbox))
-        self._write("pfb.bin", _dump_pfb(xbox))
+        self._write("pgraph.bin", _dump_pgraph(self.xbox))
+        self._write("pfb.bin", _dump_pfb(self.xbox))
         if color_offset != 0x00000000:
             self._write(
                 "mem-2.bin",
-                xbox.read(0x80000000 | color_offset, color_pitch * height),
+                self.xbox.read(0x80000000 | color_offset, color_pitch * height),
             )
         if depth_offset != 0x00000000:
             self._write(
                 "mem-3.bin",
-                xbox.read(0x80000000 | depth_offset, depth_pitch * height),
+                self.xbox.read(0x80000000 | depth_offset, depth_pitch * height),
             )
         self._write(
             "pgraph-rdi-vp-instructions.bin",
-            _read_pgraph_rdi(xbox, 0x100000, 136 * 4),
+            _read_pgraph_rdi(self.xbox, 0x100000, 136 * 4),
         )
         self._write(
             "pgraph-rdi-vp-constants0.bin",
-            _read_pgraph_rdi(xbox, 0x170000, 192 * 4),
+            _read_pgraph_rdi(self.xbox, 0x170000, 192 * 4),
         )
         self._write(
             "pgraph-rdi-vp-constants1.bin",
-            _read_pgraph_rdi(xbox, 0xCC0000, 192 * 4),
+            _read_pgraph_rdi(self.xbox, 0xCC0000, 192 * 4),
         )
 
         # FIXME: Respect anti-aliasing
@@ -400,7 +428,7 @@ class Tracer:
 
             print("Attempting to dump surface; swizzle: %s" % (str(swizzled)))
             img = Texture.dump_texture(
-                xbox, color_offset, color_pitch, fmt_color, width, height
+                self.xbox, color_offset, color_pitch, fmt_color, width, height
             )
         except:  # pylint: disable=bare-except
             img = None
@@ -439,7 +467,7 @@ class Tracer:
             0x97, NV097_BACK_END_WRITE_SEMAPHORE_RELEASE, [], [self.dump_surfaces]
         )
 
-    def _handle_begin(self, xbox, data, *args):
+    def _handle_begin(self, data, *args):
 
         # Avoid handling End
         if data == 0:
@@ -452,25 +480,25 @@ class Tracer:
         # extra_html += self.DumpTextures(xbox, data, *args)
         return extra_html
 
-    def _handle_end(self, xbox, data, *args):
+    def _handle_end(self, data, *args):
 
         # Avoid handling Begin
         if data != 0:
             return []
 
         extra_html = []
-        extra_html += self.dump_surfaces(xbox, data, *args)
+        extra_html += self.dump_surfaces(data, *args)
         return extra_html
 
-    def _begin_pgraph_recording(self, xbox, data, *args):
-        self.pgraph_dump = _dump_pgraph(xbox)
+    def _begin_pgraph_recording(self, data, *args):
+        self.pgraph_dump = _dump_pgraph(self.xbox)
         self.html_log.log(["", "", "", "", "Dumped PGRAPH for later"])
         return []
 
-    def _end_pgraph_recording(self, xbox, data, *args):
+    def _end_pgraph_recording(self, data, *args):
         # Debug feature to understand PGRAPH
         if self.pgraph_dump is not None:
-            new_pgraph_dump = _dump_pgraph(xbox)
+            new_pgraph_dump = _dump_pgraph(self.xbox)
 
             # This blacklist was created from a CLEAR_COLOR, CLEAR
             blacklist = [
@@ -586,7 +614,7 @@ class Tracer:
 
         return []
 
-    def _handle_flip_stall(self, xbox, data, *args):
+    def _handle_flip_stall(self, data, *args):
         print("Flip (Stall)")
         self.flip_stall_count += 1
 
@@ -596,13 +624,11 @@ class Tracer:
             raise MaxFlipExceeded()
         return []
 
-    def _filter_pgraph_method(self, xbox, method):
+    def _filter_pgraph_method(self, nv_obj, method):
         # Do callback for pre-method
-        if method in self.method_callbacks:
-            return self.method_callbacks[method]
-        return [], []
+        return self.method_callbacks[nv_obj].get(method, ([], []))
 
-    def _record_pgraph_method(self, xbox, method_info, data, pre_info, post_info):
+    def _record_pgraph_method(self, method_info, data, pre_info, post_info):
         if data is not None:
             dataf = struct.unpack("<f", struct.pack("<L", data))[0]
             self.nv2a_log.log_method(method_info, data, pre_info, post_info)
@@ -629,12 +655,12 @@ class Tracer:
                 + post_info
             )
 
-    def _write_put(self, xbox, target):
+    def _write_put(self, target):
 
         prev_target = self.target_dma_put_addr
         prev_real = self.real_dma_put_addr
 
-        real = _exchange_u32(xbox, XboxHelper.DMA_PUT_ADDR, target)
+        real = _exchange_u32(self.xbox, XboxHelper.DMA_PUT_ADDR, target)
         self.target_dma_put_addr = target
 
         # It must point where we pointed previously, otherwise something is broken
@@ -643,18 +669,18 @@ class Tracer:
                 "New real PUT (0x%08X -> 0x%08X) while changing hook 0x%08X -> 0x%08X"
                 % (prev_real, real, prev_target, target)
             )
-            s1 = xbox.read_u32(XboxHelper.PUT_STATE)
-            if s1 & 1:
+            put_s1 = self.xbox.read_u32(XboxHelper.PUT_STATE)
+            if put_s1 & 1:
                 print("PUT was modified and pusher was already active!")
                 time.sleep(60.0)
             self.real_dma_put_addr = real
             # traceback.print_stack()
 
-    def _parse_push_buffer_command(self, xbox, get_addr):
+    def _parse_push_buffer_command(self, get_addr):
         global DebugPrint
 
         # Retrieve command type from Xbox
-        word = xbox.read_u32(0x80000000 | get_addr)
+        word = self.xbox.read_u32(0x80000000 | get_addr)
         self.html_log.log(["", "", "", "@0x%08X: DATA: 0x%08X" % (get_addr, word)])
 
         # FIXME: Get where this command ends
@@ -665,7 +691,7 @@ class Tracer:
             return None, 0
 
         # Check which method it is.
-        if ((word & 0xE0030003) == 0) or ((word & 0xE0030003) == 0x40000000):
+        if not (word & 0xE0030003) or (word & 0xE0030003) == 0x40000000:
             # methods
             method = word & 0x1FFF
             subchannel = (word >> 13) & 7
@@ -674,6 +700,7 @@ class Tracer:
 
             method_info = {}
             method_info["address"] = get_addr
+            method_info["object"] = self.xbox_helper.fetch_graphics_class()
             method_info["method"] = method
             method_info["nonincreasing"] = method_nonincreasing
             method_info["subchannel"] = subchannel
@@ -686,7 +713,7 @@ class Tracer:
                 )
                 data = []
             else:
-                command = xbox.read(0x80000000 | (get_addr + 4), method_count * 4)
+                command = self.xbox.read(0x80000000 | (get_addr + 4), method_count * 4)
 
                 # FIXME: Unpack all of them?
                 data = struct.unpack("<%dL" % method_count, command)
@@ -697,15 +724,16 @@ class Tracer:
 
         return method_info, next_parser_addr
 
-    def _get_method_hooks(self, xbox, method_info):
+    def _get_method_hooks(self, method_info):
 
         pre_callbacks = []
         post_callbacks = []
 
+        nv_obj = method_info["object"]
         method = method_info["method"]
         for data in method_info["data"]:
             pre_callbacks_this, post_callbacks_this = self._filter_pgraph_method(
-                xbox, method
+                nv_obj, method
             )
 
             # Queue the callbacks
@@ -717,25 +745,23 @@ class Tracer:
 
         return pre_callbacks, post_callbacks
 
-    def _record_push_buffer_command(
-        self, xbox, address, method_info, pre_info, post_info
-    ):
+    def _record_push_buffer_command(self, address, method_info, pre_info, post_info):
         orig_method = method_info["method"]
 
         self.html_log.log(["%d" % self.command_count, "%s" % method_info])
         # Handle special case from Halo: CE where there are commands with no data.
         if not method_info["data"]:
-            self._record_pgraph_method(xbox, method_info, None, pre_info, post_info)
+            self._record_pgraph_method(method_info, None, pre_info, post_info)
         else:
             for data in method_info["data"]:
-                self._record_pgraph_method(xbox, method_info, data, pre_info, post_info)
+                self._record_pgraph_method(method_info, data, pre_info, post_info)
                 if not method_info["nonincreasing"]:
                     method_info["method"] += 4
 
         method_info["method"] = orig_method
         self.command_count += 1
 
-    def process_push_buffer_command(self, xbox, xbox_helper, parser_addr):
+    def process_push_buffer_command(self, parser_addr):
         self.html_log.log(
             [
                 "WARNING",
@@ -749,10 +775,10 @@ class Tracer:
         else:
 
             # Filter commands and check where it wants to go to
-            method_info, post_addr = self._parse_push_buffer_command(xbox, parser_addr)
+            method_info, post_addr = self._parse_push_buffer_command(parser_addr)
 
             # We have a problem if we can't tell where to go next
-            assert post_addr != 0
+            assert post_addr
 
             # If we have a method, work with it
             if method_info is None:
@@ -763,9 +789,7 @@ class Tracer:
             else:
 
                 # Check what method this is
-                pre_callbacks, post_callbacks = self._get_method_hooks(
-                    xbox, method_info
-                )
+                pre_callbacks, post_callbacks = self._get_method_hooks(method_info)
 
                 # Count number of bytes in instruction
                 unprocessed_bytes = 4 * (1 + len(method_info["data"]))
@@ -775,12 +799,12 @@ class Tracer:
                 if len(pre_callbacks) > 0:
 
                     # Go where we want to go
-                    self.run_fifo(xbox, xbox_helper, parser_addr)
+                    self.run_fifo(parser_addr)
 
                     # Do the pre callbacks before running the command
                     # FIXME: assert we are where we wanted to be
                     for callback in pre_callbacks:
-                        pre_info += callback(xbox, method_info["data"][0])
+                        pre_info += callback(method_info["data"][0])
 
                 # Go where we can do post-callback
                 post_info = []
@@ -790,18 +814,18 @@ class Tracer:
                     assert parser_addr != self.real_dma_put_addr
 
                     # Go where we want to go (equivalent to step)
-                    self.run_fifo(xbox, xbox_helper, post_addr)
+                    self.run_fifo(post_addr)
 
                     # We have processed all bytes now
                     unprocessed_bytes = 0
 
                     # Do all post callbacks
                     for callback in post_callbacks:
-                        post_info += callback(xbox, method_info["data"][0])
+                        post_info += callback(method_info["data"][0])
 
                 # Add the pushbuffer command to log
                 self._record_push_buffer_command(
-                    xbox, parser_addr, method_info, pre_info, post_info
+                    parser_addr, method_info, pre_info, post_info
                 )
 
             # Move parser to the next instruction
