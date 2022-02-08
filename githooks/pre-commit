@@ -1,0 +1,65 @@
+#!/bin/bash
+#
+# To enable this hook, rename this file to "pre-commit" and copy into the
+# ../.git/hooks directory.
+
+
+function check_no_diffmarkers_or_whitespace_errors {
+  # If there are whitespace errors, print the offending file names and fail.
+  set -e
+  git diff-index --check --cached "${1}" --
+  set +e
+}
+
+
+function run_black {
+  # Run black against any changed python files.
+  if ! which black > /dev/null; then
+    cat <<\EOF
+Warning: black is not installed or is not in the PATH.
+
+Please install and amend this commit.
+
+Try:
+        pip3 install black
+EOF
+    return
+  fi
+
+  # Reformat the files in-place and re-add any that were changed.
+  #
+  # Note that this has the side effect of incorporating changes to staged files
+  # that were not themselves staged. E.g., if you edit a file, `git add`, then
+  # edit some more, then commit, all of the changes will be committed, not just
+  # the staged ones. Depending on typical workflows it might be better to do
+  # something more complicated here, or to just have the hook fail instead of
+  # perform an in-place fix.
+  files_to_format="$(echo "${changed_python_filenames}" | grep -v '3rdparty')"
+  if [[ -n "${files_to_format}" ]]; then
+    echo "${files_to_format}" | xargs black
+    echo "${files_to_format}" | xargs git add
+  fi
+}
+
+
+if git rev-parse --verify HEAD >/dev/null 2>&1; then
+  against=HEAD
+else
+  # Initial commit: diff against an empty tree object
+  against=$(git hash-object -t tree /dev/null)
+fi
+
+# Redirect output to stderr.
+exec 1>&2
+
+
+added_and_modified_filenames="$(git diff --cached --name-only --diff-filter=d)"
+changed_python_filenames="$(echo "${added_and_modified_filenames}" | \
+                            grep -E '.*\.py$')"
+
+
+# Allow blank line at EOF.
+git config --local core.whitespace -blank-at-eof
+
+run_black
+check_no_diffmarkers_or_whitespace_errors "${against}"
