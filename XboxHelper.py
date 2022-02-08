@@ -5,31 +5,92 @@
 # pylint: disable=chained-comparison
 
 import atexit
+import time
 
-DMA_STATE = 0xFD003228
-DMA_PUT_ADDR = 0xFD003240
-DMA_GET_ADDR = 0xFD003244
-DMA_SUBROUTINE = 0xFD00324C
+# mmio blocks
+NV2A_MMIO_BASE = 0xFD000000
+BLOCK_PMC = 0x000000
+BLOCK_PBUS = 0x001000
+BLOCK_PFIFO = 0x002000
+BLOCK_PRMA = 0x007000
+BLOCK_PVIDEO = 0x008000
+BLOCK_PTIMER = 0x009000
+BLOCK_PCOUNTER = 0x00A000
+BLOCK_PVPE = 0x00B000
+BLOCK_PTV = 0x00D000
+BLOCK_PRMFB = 0x0A0000
+BLOCK_PRMVIO = 0x0C0000
+BLOCK_PFB = 0x100000
+BLOCK_PSTRAPS = 0x101000
+BLOCK_PGRAPH = 0x400000
+BLOCK_PCRTC = 0x600000
+BLOCK_PRMCIO = 0x601000
+BLOCK_PRAMDAC = 0x680000
+BLOCK_PRMDIO = 0x681000
+BLOCK_PRAMIN = 0x700000
+BLOCK_USER = 0x800000
 
-PUT_ADDR = 0xFD003210
-PUT_STATE = 0xFD003220
-GET_ADDR = 0xFD003270
-GET_STATE = 0xFD003250
 
-PGRAPH_STATE = 0xFD400720
-PGRAPH_STATUS = 0xFD400700
+def _PFIFO(addr):
+    return NV2A_MMIO_BASE + BLOCK_PFIFO + addr
+
+
+def _PGRAPH(addr):
+    return NV2A_MMIO_BASE + BLOCK_PGRAPH + addr
+
+
+NV_PFIFO_CACHE1_DMA_STATE = 0x00001228
+DMA_STATE = _PFIFO(NV_PFIFO_CACHE1_DMA_STATE)
+
+NV_PFIFO_CACHE1_DMA_PUT = 0x00001240
+DMA_PUT_ADDR = _PFIFO(NV_PFIFO_CACHE1_DMA_PUT)
+
+NV_PFIFO_CACHE1_DMA_GET = 0x00001244
+DMA_GET_ADDR = _PFIFO(NV_PFIFO_CACHE1_DMA_GET)
+
+NV_PFIFO_CACHE1_DMA_SUBROUTINE = 0x0000124C
+DMA_SUBROUTINE = _PFIFO(NV_PFIFO_CACHE1_DMA_SUBROUTINE)
+
+NV_PFIFO_CACHE1_PUT = 0x00001210
+PUT_ADDR = _PFIFO(NV_PFIFO_CACHE1_PUT)
+
+NV_PFIFO_CACHE1_DMA_PUSH = 0x00001220
+PUT_STATE = _PFIFO(NV_PFIFO_CACHE1_DMA_PUSH)
+
+NV_PFIFO_CACHE1_GET = 0x00001270
+GET_ADDR = _PFIFO(NV_PFIFO_CACHE1_GET)
+
+NV_PFIFO_CACHE1_PULL0 = 0x00001250
+GET_STATE = _PFIFO(NV_PFIFO_CACHE1_PULL0)
+
+NV_PFIFO_RAMHT = 0x00000210
+RAM_HASHTABLE = _PFIFO(NV_PFIFO_RAMHT)
+
+NV_PGRAPH_CTX_SWITCH1 = 0x014C
+CTX_SWITCH1 = _PGRAPH(NV_PGRAPH_CTX_SWITCH1)
+
+NV_PGRAPH_FIFO = 0x00000720
+PGRAPH_STATE = _PGRAPH(NV_PGRAPH_FIFO)
+
+NV_PGRAPH_STATUS = 0x00000700
+PGRAPH_STATUS = _PGRAPH(NV_PGRAPH_STATUS)
+
+
+def _free_allocation(xbox, address):
+    print("_free_allocation: Free'ing 0x%08X" % address)
+    xbox.ke.MmFreeContiguousMemory(address)
+    # Sleep to ensure the call is fully processed.
+    time.sleep(0.1)
+    print("_free_allocation: Freed")
 
 
 def load_binary(xbox, data):
     """Loads arbitrary data into a new contiguous memory block on the xbox."""
-    code_addr = xbox.ke.MmAllocateContiguousMemory(len(data))
-    print("load_binary: Allocated 0x%08X" % code_addr)
+    data_len = len(data)
+    code_addr = xbox.ke.MmAllocateContiguousMemory(data_len)
+    print("load_binary: Allocated %d bytes at 0x%08X" % (data_len, code_addr))
 
-    def free_allocation():
-        print("load_binary: Free'ing 0x%08X" % code_addr)
-        xbox.ke.MmFreeContiguousMemory(code_addr)
-
-    atexit.register(free_allocation)
+    atexit.register(_free_allocation, xbox, code_addr)
     xbox.write(code_addr, data)
     return code_addr
 
@@ -88,6 +149,8 @@ class XboxHelper:
 
     def __init__(self, xbox):
         self.xbox = xbox
+        self.ramht_offset = 0
+        self.ramht_size = 0
 
     def delay(self):
         # FIXME: if this returns `True`, the functions below should have their own
@@ -214,6 +277,23 @@ class XboxHelper:
         # higher bits are for error signalling?
 
         print("v_dma_method: 0x%04X (count: %d)" % (v_dma_method, v_dma_method_count))
+
+    def fetch_ramht(self):
+        ht = self.xbox.read_u32(RAM_HASHTABLE)
+        NV_PFIFO_RAMHT_BASE_ADDRESS = 0x000001F0
+        NV_PFIFO_RAMHT_SIZE = 0x00030000
+
+        offset = (ht & NV_PFIFO_RAMHT_BASE_ADDRESS) << 12
+        size = 1 << (((ht & NV_PFIFO_RAMHT_SIZE) >> 16) + 12)
+
+        self.ramht_offset = offset
+        self.ramht_size = size
+        print("RAMHT: 0x%X - Base addr 0x%X size: %d" % (ht, offset, size))
+
+    def fetch_graphics_class(self):
+        """Returns the target graphics class."""
+        ctx_switch_1 = self.xbox.read_u32(CTX_SWITCH1)
+        return ctx_switch_1 & 0xFF
 
 
 def apply_anti_aliasing_factor(surface_anti_aliasing, x, y):
