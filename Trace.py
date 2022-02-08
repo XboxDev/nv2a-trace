@@ -57,7 +57,11 @@ def _loadBinary(xbox, code):
 def _exchangeU32Call(xbox, address, value):
   global exchange_u32_addr
   if exchange_u32_addr is None:
-    exchange_u32_addr = _loadBinary(xbox, bytes([0xFA, 0x8B, 0x44, 0x24, 0x04, 0x8B, 0x54, 0x24, 0x08, 0x87, 0x02, 0xFB, 0xC2, 0x08, 0x00]))
+
+    with open("exchange_u32", "rb") as infile:
+      data = infile.read()
+
+    exchange_u32_addr = _loadBinary(xbox, data)
     print("exchange_u32 installed at 0x%08X" % exchange_u32_addr)
   return xbox.call(exchange_u32_addr, struct.pack("<LL", value, address))['eax']
 
