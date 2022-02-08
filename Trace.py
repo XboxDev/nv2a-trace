@@ -1,3 +1,4 @@
+import atexit
 import os
 import struct
 import time
@@ -10,8 +11,12 @@ from helper import *
 PixelDumping = True
 DebugPrint = False
 
+pgraph_dump = None
+exchange_u32_addr = None
+kick_fifo_addr = None
+
 debugLog = os.path.join("out", "debug.html")
-def addHTML(xx):
+def _addHTML(xx):
   f = open(debugLog,"a")
   f.write("<tr>")
   for x in xx:
@@ -22,22 +27,15 @@ f = open(debugLog,"w")
 f.write("<html><head><style>body { font-family: sans-serif; background:#333; color: #ccc } img { border: 1px solid #FFF; } td, tr, table { background: #444; padding: 10px; border:1px solid #888; border-collapse: collapse; }</style></head><body><table>\n")
 #FIXME: atexit close tags.. but yolo!
 f.close()
-addHTML(["<b>#</b>", "<b>Opcode / Method</b>", "..."])
+_addHTML(["<b>#</b>", "<b>Opcode / Method</b>", "..."])
 
 
-
-pgraph_dump = None
-
-
-
-def html_print(s):
+def _htmlPrint(s):
   print(s)
-  addHTML([s])
+  _addHTML([s])
 
 
-import atexit
-
-def load_binary(xbox, code):
+def _loadBinary(xbox, code):
   code_addr = xbox.ke.MmAllocateContiguousMemory(len(code))
   print("Allocated 0x%08X" % code_addr)
   def free_code():
@@ -48,23 +46,19 @@ def load_binary(xbox, code):
   return code_addr
 
 
-exchange_u32_addr = None
-def exchange_u32_call(xbox, address, value):
+def _exchangeU32Call(xbox, address, value):
   global exchange_u32_addr
   if exchange_u32_addr is None:
-    exchange_u32_addr = load_binary(xbox, bytes([ 0xFA, 0x8B, 0x44, 0x24, 0x04, 0x8B, 0x54, 0x24, 0x08, 0x87, 0x02, 0xFB, 0xC2, 0x08, 0x00 ]))
+    exchange_u32_addr = _loadBinary(xbox, bytes([0xFA, 0x8B, 0x44, 0x24, 0x04, 0x8B, 0x54, 0x24, 0x08, 0x87, 0x02, 0xFB, 0xC2, 0x08, 0x00]))
     print("exchange_u32 installed at 0x%08X" % exchange_u32_addr)
   return xbox.call(exchange_u32_addr, struct.pack("<LL", value, address))['eax']
 
-def exchange_u32_simple(xbox, address, value):
-  old_value = xbox.read_u32(address)
-  xbox.write_u32(address, value)
-  return old_value
 
-def exchange_u32(xbox, address, value):
-  return exchange_u32_call(xbox, address, value)
+def _exchangeU32(xbox, address, value):
+  return _exchangeU32Call(xbox, address, value)
 
-def dumpPGRAPH(xbox):
+
+def _dumpPGRAPH(xbox):
   buffer = bytearray([])
   buffer.extend(xbox.read(0xFD400000, 0x200))
 
@@ -78,7 +72,8 @@ def dumpPGRAPH(xbox):
   assert(len(buffer) == 0x2000)
   return bytes(buffer)
 
-def dumpPFB(xbox):
+
+def _dumpPFB(xbox):
   buffer = bytearray([])
   buffer.extend(xbox.read(0xFD100000, 0x1000))
 
@@ -86,7 +81,8 @@ def dumpPFB(xbox):
   assert(len(buffer) == 0x1000)
   return bytes(buffer)
 
-def read_pgraph_rdi(xbox, offset, count):
+
+def _readPGRAPHRDI(xbox, offset, count):
   #FIXME: Assert pusher access is disabled
   #FIXME: Assert PGRAPH idle
   
@@ -103,55 +99,57 @@ def read_pgraph_rdi(xbox, offset, count):
   #FIXME: Assert the conditions from entry have not changed
   return data
 
-kick_fifo_addr = None
-def kick_fifo_call(xbox, expected_put):
+
+def _kickFifoCall(xbox, expected_put):
   global kick_fifo_addr
   if kick_fifo_addr is None:
-    kick_fifo_addr = load_binary(xbox, open("kick_fifo", "rb").read())
+    kick_fifo_addr = _loadBinary(xbox, open("kick_fifo", "rb").read())
     print("kick_fifo installed at 0x%08X" % kick_fifo_addr)
   eax = xbox.call(kick_fifo_addr, struct.pack("<L", expected_put))['eax']
   assert(eax != 0xBADBAD)
 
-# This version is open to race conditions, where PUT is modified.
-# This might lead to accidental command injection.
-def kick_fifo_simple(xbox, expected_put):
-  resume_fifo_pusher(xbox)
-  pause_fifo_pusher(xbox)
 
-def kick_fifo(xbox, expected_put):
-  kick_fifo_call(xbox, expected_put)
+def _kickFifo(xbox, expected_put):
+  _kickFifoCall(xbox, expected_put)
 
 
 class Tracer():
+
+  def __init__(self, dma_get_addr, dma_put_addr):
+    self.flipStallCount = 0
+    self.commandCount = 0
+
+    self.real_dma_get_addr = dma_get_addr
+    self.real_dma_put_addr = dma_put_addr
+    self.target_dma_put_addr = dma_get_addr
+
+
+    self.method_callbacks = {}
+
+    self.methodHooks(0x97, 0x1D94, [],                 [self.DumpSurfaces])    # CLEAR
+    self.methodHooks(0x97, 0x17FC, [self.HandleBegin], [self.HandleEnd])       # BEGIN_END
+
+    # Check for texture address changes
+    #for i in range(4):
+    #  methodHooks(0x1B00 + 64 * i, [],    [HandleSetTexture], i)
+
+    # Add the list of commands which might trigger CPU actions
+    self.methodHooks(0x97, 0x0130, [],                 [self.HandleFlipStall]) # FLIP_STALL
+    self.methodHooks(0x97, 0x1D70, [],                 [self.DumpSurfaces])    # BACK_END_WRITE_SEMAPHORE_RELEASE
 
   def out(self, suffix, contents):
     with open(("out/command%d_" % self.commandCount)+ suffix, "wb") as f:
       f.write(contents)
 
-
-
-
-
-
-
-
-
-
-
-
   #FIXME: Maybe take a list of vertices?
   def DumpVertexAttributes(self, xbox, data, *args):
-    pass
     return []
 
   def DumpBlitSource(self, xbox, data, *args):
-    pass
     return []
 
   def DumpBlitDest(self, xbox, data, *args):
-    pass
     return []
-
 
   def DumpTextures(self, xbox, data, *args):
     global PixelDumping
@@ -227,7 +225,6 @@ class Tracer():
     width = clip_x + clip_w
     height = clip_y + clip_h
 
-
     #FIXME: 128 x 128 [pitch = 256 (0x100)], at 0x01AA8000 [PGRAPH: 0x01AA8000?], format 0x5, type: 0x21000002, swizzle: 0x7070000 [used 0]
 
     #FIXME: This does not seem to be a good field for this
@@ -238,26 +235,20 @@ class Tracer():
     format_color = (draw_format >> 12) & 0xF
     format_depth = (draw_format >> 18) & 0x3
 
-    fmt_color = Texture.surface_color_format_to_texture_format(format_color, swizzled)
+    fmt_color = Texture.surfaceColorFormatToTextureFormat(format_color, swizzled)
     #fmt_depth = Texture.surface_zeta_format_to_texture_format(format_depth)
-   
-
-
 
     # Dump stuff we might care about
     if True:
-      self.out("pgraph.bin", dumpPGRAPH(xbox))
-      self.out("pfb.bin", dumpPFB(xbox))
+      self.out("pgraph.bin", _dumpPGRAPH(xbox))
+      self.out("pfb.bin", _dumpPFB(xbox))
       if color_offset != 0x00000000:
         self.out("mem-2.bin", xbox.read(0x80000000 | color_offset, color_pitch * height))
       if depth_offset != 0x00000000:
         self.out("mem-3.bin", xbox.read(0x80000000 | depth_offset, depth_pitch * height))
-      self.out("pgraph-rdi-vp-instructions.bin", read_pgraph_rdi(xbox, 0x100000, 136 * 4))
-      self.out("pgraph-rdi-vp-constants0.bin", read_pgraph_rdi(xbox, 0x170000, 192 * 4))
-      self.out("pgraph-rdi-vp-constants1.bin", read_pgraph_rdi(xbox, 0xCC0000, 192 * 4))
-
-    
-
+      self.out("pgraph-rdi-vp-instructions.bin", _readPGRAPHRDI(xbox, 0x100000, 136 * 4))
+      self.out("pgraph-rdi-vp-constants0.bin", _readPGRAPHRDI(xbox, 0x170000, 192 * 4))
+      self.out("pgraph-rdi-vp-constants1.bin", _readPGRAPHRDI(xbox, 0xCC0000, 192 * 4))
 
     #FIXME: Respect anti-aliasing
 
@@ -312,16 +303,16 @@ class Tracer():
 
   def beginPGRAPHRecord(self, xbox, data, *args):
     global pgraph_dump
-    pgraph_dump = dumpPGRAPH(xbox)
-    addHTML(["", "", "", "", "Dumped PGRAPH for later"])
+    pgraph_dump = _dumpPGRAPH(xbox)
+    _addHTML(["", "", "", "", "Dumped PGRAPH for later"])
     return []
 
-  def endPGRAPHRecord(xbox, data, *args):
+  def endPGRAPHRecord(self, xbox, data, *args):
     global pgraph_dump
 
     # Debug feature to understand PGRAPH
     if pgraph_dump != None:
-      new_pgraph_dump = dumpPGRAPH(xbox)
+      new_pgraph_dump = _dumpPGRAPH(xbox)
 
       # This blacklist was created from a CLEAR_COLOR, CLEAR
       blacklist = []
@@ -420,15 +411,12 @@ class Tracer():
         word = struct.unpack_from("<L", pgraph_dump, i * 4)[0]
         new_word = struct.unpack_from("<L", new_pgraph_dump, i * 4)[0]
         if new_word != word:
-          addHTML(["", "", "", "", "Modified 0x%08X in PGRAPH: 0x%08X &rarr; 0x%08X" % (off, word, new_word)])
+          _addHTML(["", "", "", "", "Modified 0x%08X in PGRAPH: 0x%08X &rarr; 0x%08X" % (off, word, new_word)])
+
       pgraph_dump = None
-      addHTML(["", "", "", "", "Finished PGRAPH comparison"])
+      _addHTML(["", "", "", "", "Finished PGRAPH comparison"])
 
     return []
-
-
-
-
 
   def updateSurfaceClipX(self, data):
     global surface_clip_x
@@ -461,86 +449,34 @@ class Tracer():
     pass
     #FIXME: Dump texture here?
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
   def filterPGRAPHMethod(self, xbox, method):
     # Do callback for pre-method
     if method in self.method_callbacks:
       return self.method_callbacks[method]
     return [], []
-    
 
   def recordPGRAPHMethod(self, xbox, method_info, data, pre_info, post_info):
     dataf = struct.unpack("<f", struct.pack("<L", data))[0]
 
-    addHTML(["", "0x%08X" % method_info['address'], "0x%04X" % method_info['method'], "0x%08X / %f" % (data, dataf)] + pre_info + post_info)
-
-
-
-
-
-
-
-
-
-
-
-  def __init__(self, dma_get_addr, dma_put_addr):
-    self.flipStallCount = 0
-    self.commandCount = 0
-
-    self.real_dma_get_addr = dma_get_addr
-    self.real_dma_put_addr = dma_put_addr
-    self.target_dma_put_addr = dma_get_addr
-
-
-    self.method_callbacks = {}
-
-    self.methodHooks(0x97, 0x1D94, [],                 [self.DumpSurfaces])    # CLEAR
-    self.methodHooks(0x97, 0x17FC, [self.HandleBegin], [self.HandleEnd])       # BEGIN_END
-
-    # Check for texture address changes
-    #for i in range(4):
-    #  methodHooks(0x1B00 + 64 * i, [],    [HandleSetTexture], i)
-
-    # Add the list of commands which might trigger CPU actions
-    self.methodHooks(0x97, 0x0130, [],                 [self.HandleFlipStall]) # FLIP_STALL
-    self.methodHooks(0x97, 0x1D70, [],                 [self.DumpSurfaces])    # BACK_END_WRITE_SEMAPHORE_RELEASE
-
-  
+    _addHTML(["", "0x%08X" % method_info['address'], "0x%04X" % method_info['method'], "0x%08X / %f" % (data, dataf)] + pre_info + post_info)
 
   def WritePUT(self, xbox, target):
 
     prev_target = self.target_dma_put_addr
     prev_real = self.real_dma_put_addr
 
-    real = exchange_u32(xbox, dma_put_addr, target)
+    real = _exchangeU32(xbox, dma_put_addr, target)
     self.target_dma_put_addr = target
 
     # It must point where we pointed previously, otherwise something is broken
     if (real != prev_target):
-      html_print("New real PUT (0x%08X -> 0x%08X) while changing hook 0x%08X -> 0x%08X" % (prev_real, real, prev_target, target))
+      _htmlPrint("New real PUT (0x%08X -> 0x%08X) while changing hook 0x%08X -> 0x%08X" % (prev_real, real, prev_target, target))
       s1 = xbox.read_u32(put_state)
       if s1 & 1:
         print("PUT was modified and pusher was already active!")
         time.sleep(60.0)
       self.real_dma_put_addr = real
       #traceback.print_stack()
-
-
 
   def run_fifo(self, xbox, xbox_helper, put_target):
     global DebugPrint
@@ -552,7 +488,7 @@ class Tracer():
     self.real_dma_get_addr = xbox.read_u32(dma_get_addr)
 
 
-    addHTML(["WARNING", "Running FIFO (GET: 0x%08X -- PUT: 0x%08X / 0x%08X)" % (self.real_dma_get_addr, put_target, self.real_dma_put_addr)])
+    _addHTML(["WARNING", "Running FIFO (GET: 0x%08X -- PUT: 0x%08X / 0x%08X)" % (self.real_dma_get_addr, put_target, self.real_dma_put_addr)])
 
     # Loop while this command is being ran.
     # This is necessary because a whole command might not fit into CACHE.
@@ -575,7 +511,7 @@ class Tracer():
         self.WritePUT(xbox, self.target_dma_put_addr)
 
         # Kick commands into CACHE.
-        kick_fifo(xbox, self.target_dma_put_addr)
+        _kickFifo(xbox, self.target_dma_put_addr)
 
         #print("PUT STATE 0x%08X" % xbox.read_u32(0xFD003220))
 
@@ -589,20 +525,12 @@ class Tracer():
     # This is just to confirm that nothing was modified in the final chunk
     self.WritePUT(xbox, self.target_dma_put_addr)
 
-    return
-
-
-
-
-
-
-
   def parsePushBufferCommand(self, xbox, get_addr):
     global DebugPrint
 
     # Retrieve command type from Xbox
     word = xbox.read_u32(0x80000000 | get_addr)
-    addHTML(["", "", "", "@0x%08X: DATA: 0x%08X" % (get_addr, word)])
+    _addHTML(["", "", "", "@0x%08X: DATA: 0x%08X" % (get_addr, word)])
 
     #FIXME: Get where this command ends
     next_parser_addr = parseCommand(get_addr, word, DebugPrint)
@@ -610,7 +538,6 @@ class Tracer():
     # If we don't know where this command ends, we have to abort.
     if next_parser_addr == 0:
       return None, 0
-
 
     # Check which method it is.
     if ((word & 0xe0030003) == 0) or ((word & 0xe0030003) == 0x40000000):
@@ -657,12 +584,11 @@ class Tracer():
 
     return pre_callbacks, post_callbacks
 
-
   def recordPushBufferCommand(self, xbox, address, method_info, pre_info, post_info):
     orig_method = method_info['method']
 
     # Put info in debug HTML
-    addHTML(["%d" % self.commandCount, "%s" % method_info])
+    _addHTML(["%d" % self.commandCount, "%s" % method_info])
     for data in method_info['data']:
 
       self.recordPGRAPHMethod(xbox, method_info, data, pre_info, post_info)
@@ -677,12 +603,8 @@ class Tracer():
 
     return
 
-
   def processPushBufferCommand(self, xbox, xbox_helper, parser_addr):
-    parser_addr
-
-    addHTML(["WARNING", "Starting FIFO parsing from 0x%08X -- 0x%08X" % (parser_addr, self.real_dma_put_addr)])
-
+    _addHTML(["WARNING", "Starting FIFO parsing from 0x%08X -- 0x%08X" % (parser_addr, self.real_dma_put_addr)])
 
     if parser_addr == self.real_dma_put_addr:
       unprocessed_bytes = 0
@@ -697,7 +619,7 @@ class Tracer():
       # If we have a method, work with it
       if method_info is None:
 
-        addHTML(["WARNING", "No method. Going to 0x%08X" % post_addr])
+        _addHTML(["WARNING", "No method. Going to 0x%08X" % post_addr])
         unprocessed_bytes = 4
 
       else:
@@ -738,15 +660,13 @@ class Tracer():
           for callback in post_callbacks:
             post_info += callback(xbox, method_info['data'][0])
 
-
         # Add the pushbuffer command to log
         self.recordPushBufferCommand(xbox, parser_addr, method_info, pre_info, post_info)
-
 
       # Move parser to the next instruction
       parser_addr = post_addr
 
-    addHTML(["WARNING", "Sucessfully finished FIFO parsing 0x%08X -- 0x%08X (%d bytes unprocessed)" % (parser_addr, self.real_dma_put_addr, unprocessed_bytes)])
+    _addHTML(["WARNING", "Sucessfully finished FIFO parsing 0x%08X -- 0x%08X (%d bytes unprocessed)" % (parser_addr, self.real_dma_put_addr, unprocessed_bytes)])
 
     return parser_addr, unprocessed_bytes
 
@@ -756,25 +676,7 @@ class Tracer():
   def recordedPushBufferCommandCount(self):
     return self.commandCount
 
-
-
-
-
-
-
-
-
-
-
-
-
-
   def methodHooks(self, obj, method, pre_hooks, post_hooks, user = None):
     print("Registering method hook for 0x%04X" % method)
     self.method_callbacks[method] = (pre_hooks, post_hooks)
     return
-
-
-
-
-

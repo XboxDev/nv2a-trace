@@ -2,27 +2,26 @@
 
 from xboxpy import *
 
-from helper import *
-
-# Create output folder
 import os
-try:
-  os.mkdir("out")
-except:
-  pass
-
-import time
 import signal
 import sys
 import struct
+import time
 import traceback
 
 from helper import *
 
 import Trace
 
+# Create output folder
+try:
+  os.mkdir("out")
+except:
+  pass
+
 
 abortNow = False
+_enable_experimental_disable_z_compression_and_tiling = True
 
 
 def signal_handler(signal, frame):
@@ -85,7 +84,6 @@ def main():
     # Resume pusher - The PB can't run yet, as it has no commands to process.
     xbox_helper.resume_fifo_pusher()
 
-  
     # We might get issues where the pusher missed our PUT (miscalculated).
     # This can happen as `v_dma_method_count` is not the most accurate.
     # Probably because the DMA is halfway through a transfer.
@@ -116,45 +114,49 @@ def main():
 
   bytes_queued = 0
 
-  # Disable Z-buffer compression and Tiling
-  # FIXME: This is a dirty dirty hack which breaks PFB and PGRAPH state!
-  NV10_PGRAPH_RDI_INDEX = 0xFD400750
-  NV10_PGRAPH_RDI_DATA = 0xFD400754
-  for i in range(8):
+  def ExperimentalDisableZCompressionAndTiling():
+    # Disable Z-buffer compression and Tiling
+    # FIXME: This is a dirty dirty hack which breaks PFB and PGRAPH state!
+    NV10_PGRAPH_RDI_INDEX = 0xFD400750
+    NV10_PGRAPH_RDI_DATA = 0xFD400754
+    for i in range(8):
 
-    # This is from a discussion on nouveau IRC:
-    #  mwk: the RDI copy is for texturing
-    #  mwk: the mmio PGRAPH copy is for drawing to the framebuffer
+      # This is from a discussion on nouveau IRC:
+      #  mwk: the RDI copy is for texturing
+      #  mwk: the mmio PGRAPH copy is for drawing to the framebuffer
 
-    # Disabling Z-Compression seems to work fine
-    if True:
-      zcomp = xbox.read_u32(0xFD100300 + 4 * i)
-      zcomp &= 0x7FFFFFFF
-      xbox.write_u32(0xFD100300 + 4 * i, zcomp) # PFB
-      xbox.write_u32(0xFD400980 + 4 * i, zcomp) # PGRAPH
-      if True: # PGRAPH RDI
-        #FIXME: This scope should be atomic
-        xbox.write_u32(NV10_PGRAPH_RDI_INDEX, 0x00EA0090 + 4 * i)
-        xbox.write_u32(NV10_PGRAPH_RDI_DATA, zcomp)
+      # Disabling Z-Compression seems to work fine
+      if True:
+        zcomp = xbox.read_u32(0xFD100300 + 4 * i)
+        zcomp &= 0x7FFFFFFF
+        xbox.write_u32(0xFD100300 + 4 * i, zcomp) # PFB
+        xbox.write_u32(0xFD400980 + 4 * i, zcomp) # PGRAPH
+        if True: # PGRAPH RDI
+          #FIXME: This scope should be atomic
+          xbox.write_u32(NV10_PGRAPH_RDI_INDEX, 0x00EA0090 + 4 * i)
+          xbox.write_u32(NV10_PGRAPH_RDI_DATA, zcomp)
 
-    # Disabling tiling entirely
-    if True:
-      tile_addr = xbox.read_u32(0xFD100240 + 16 * i)
-      tile_addr &= 0xFFFFFFFE
-      xbox.write_u32(0xFD100240 + 16 * i, tile_addr) # PFB
-      xbox.write_u32(0xFD400900 + 16 * i, tile_addr) # PGRAPH
-      if True: # PGRAPH RDI
-        #FIXME: This scope should be atomic
-        xbox.write_u32(NV10_PGRAPH_RDI_INDEX, 0x00EA0010 + 4 * i)
-        xbox.write_u32(NV10_PGRAPH_RDI_DATA, tile_addr)
-        #xbox.write_u32(NV10_PGRAPH_RDI_INDEX, 0x00EA0030 + 4 * i)
-        #xbox.write_u32(NV10_PGRAPH_RDI_DATA, tile_limit)
-        #xbox.write_u32(NV10_PGRAPH_RDI_INDEX, 0x00EA0050 + 4 * i)
-        #xbox.write_u32(NV10_PGRAPH_RDI_DATA, tile_pitch)
+      # Disabling tiling entirely
+      if True:
+        tile_addr = xbox.read_u32(0xFD100240 + 16 * i)
+        tile_addr &= 0xFFFFFFFE
+        xbox.write_u32(0xFD100240 + 16 * i, tile_addr) # PFB
+        xbox.write_u32(0xFD400900 + 16 * i, tile_addr) # PGRAPH
+        if True: # PGRAPH RDI
+          #FIXME: This scope should be atomic
+          xbox.write_u32(NV10_PGRAPH_RDI_INDEX, 0x00EA0010 + 4 * i)
+          xbox.write_u32(NV10_PGRAPH_RDI_DATA, tile_addr)
+          #xbox.write_u32(NV10_PGRAPH_RDI_INDEX, 0x00EA0030 + 4 * i)
+          #xbox.write_u32(NV10_PGRAPH_RDI_DATA, tile_limit)
+          #xbox.write_u32(NV10_PGRAPH_RDI_INDEX, 0x00EA0050 + 4 * i)
+          #xbox.write_u32(NV10_PGRAPH_RDI_DATA, tile_pitch)
+
+  if _enable_experimental_disable_z_compression_and_tiling:
+    # TODO: Enable after removing FIXME above.
+    ExperimentalDisableZCompressionAndTiling()
 
   # Create a new trace object
   trace = Trace.Tracer(v_dma_get_addr, v_dma_put_addr_real)
-
 
   # Record initial state
   trace.commandCount = -1
@@ -165,7 +167,6 @@ def main():
   while not abortNow:
 
     try:
-
       v_dma_get_addr, unprocessed_bytes = trace.processPushBufferCommand(xbox, xbox_helper, v_dma_get_addr)
       bytes_queued += unprocessed_bytes
 
