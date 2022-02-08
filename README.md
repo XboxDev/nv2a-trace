@@ -51,6 +51,14 @@ It will automatically start tracing.
 **This tool may also (temporarily) corrupt the state of your Xbox.**
 If this tool does not work, please retry a couple of times.
 
+### Contributing
+
+This project uses [Black](https://pypi.org/project/black/) for automatic formatting.
+You can use the pre-commit in the `githooks` directory to reformat any changes on commit
+or run the tool manually prior to creating a PR. In cases where you feel readability is
+significantly better with manual formatting, you may surround the code with
+`# fmt: off` / `# fmt: on` comments, but this should be a rare exception.
+
 ---
 
 **(C) 2018 XboxDev maintainers**
