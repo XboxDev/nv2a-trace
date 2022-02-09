@@ -215,7 +215,7 @@ class Tracer:
         self._write_put(put_target)
 
         # FIXME: we can avoid this read in some cases, as we should know where we are
-        self.real_dma_get_addr = self.xbox.read_u32(XboxHelper.DMA_GET_ADDR)
+        self.real_dma_get_addr = self.xbox.read_u32(XboxHelper.DMA_PULL_ADDR)
 
         self.html_log.log(
             [
@@ -265,7 +265,7 @@ class Tracer:
             self.xbox_helper.enable_pgraph_fifo()
 
             # Get the updated PB address.
-            new_get_addr = self.xbox.read_u32(XboxHelper.DMA_GET_ADDR)
+            new_get_addr = self.xbox.read_u32(XboxHelper.DMA_PULL_ADDR)
             if new_get_addr == self.real_dma_get_addr:
                 iterations_with_no_change += 1
             else:
@@ -660,7 +660,7 @@ class Tracer:
         prev_target = self.target_dma_put_addr
         prev_real = self.real_dma_put_addr
 
-        real = _exchange_u32(self.xbox, XboxHelper.DMA_PUT_ADDR, target)
+        real = _exchange_u32(self.xbox, XboxHelper.DMA_PUSH_ADDR, target)
         self.target_dma_put_addr = target
 
         # It must point where we pointed previously, otherwise something is broken
@@ -669,7 +669,7 @@ class Tracer:
                 "New real PUT (0x%08X -> 0x%08X) while changing hook 0x%08X -> 0x%08X"
                 % (prev_real, real, prev_target, target)
             )
-            put_s1 = self.xbox.read_u32(XboxHelper.PUT_STATE)
+            put_s1 = self.xbox.read_u32(XboxHelper.CACHE_PUSH_STATE)
             if put_s1 & 1:
                 print("PUT was modified and pusher was already active!")
                 time.sleep(60.0)
