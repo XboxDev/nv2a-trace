@@ -5,7 +5,18 @@
 # pylint: disable=chained-comparison
 
 import atexit
+from collections import namedtuple
+from typing import Optional
+from typing import Tuple
 import time
+
+DMAState = namedtuple(
+    "DMAState", ["non_increasing", "method", "subchannel", "method_count", "error"]
+)
+
+Method = namedtuple(
+    "Method", ["method", "subchannel", "method_count", "non_increasing"]
+)
 
 # For general information on PFIFO, see
 # https://envytools.readthedocs.io/en/latest/hw/fifo/intro.html
@@ -108,7 +119,7 @@ def load_binary(xbox, data):
     return code_addr
 
 
-def parse_command(addr, word, display=False):
+def parse_command(addr, word, display=False) -> Tuple[int, Optional[Method]]:
 
     prefix = "0x%08X: Opcode: 0x%08X" % (addr, word)
 
@@ -117,13 +128,13 @@ def parse_command(addr, word, display=False):
         # NV2A_DPRINTF("pb OLD_JMP 0x%" HWADDR_PRIx "\n", control->dma_get);
         addr = word & 0x1FFFFFFC
         print(prefix + "; old jump 0x%08X" % addr)
-        return addr
+        return addr, None
 
     if (word & 3) == 1:
         addr = word & 0xFFFFFFFC
         print(prefix + "; jump 0x%08X" % addr)
         # state->get_jmp_shadow = control->dma_get;
-        return addr
+        return addr, None
 
     if (word & 3) == 2:
         print(prefix + "; unhandled opcode type: call")
@@ -134,27 +145,37 @@ def parse_command(addr, word, display=False):
         # state->subroutine_return = control->dma_get;
         # state->subroutine_active = true;
         # control->dma_get = word & 0xfffffffc;
-        return 0
+        return 0, None
 
     if word == 0x00020000:
         # return
         print(prefix + "; unhandled opcode type: return")
-        return 0
+        return 0, None
 
-    if not (word & 0xE0030003) or (word & 0xE0030003) == 0x40000000:
-        # methods
-        method = word & 0x1FFF
-        # subchannel = (word >> 13) & 7
-        method_count = (word >> 18) & 0x7FF
-        # method_nonincreasing = word & 0x40000000
+    masked = word & 0xE0030003
+    is_method_increasing = not masked
+    is_method_non_increasing = masked == 0x40000000
+    if is_method_increasing or is_method_non_increasing:
+        # Should method be (word >> 2) & 0x7ff?
+        # See https://envytools.readthedocs.io/en/latest/hw/fifo/dma-pusher.html#fifo-dma-pusher
+        info = Method(
+            method=word & 0x1FFF,
+            subchannel=(word >> 13) & 7,
+            method_count=(word >> 18) & 0x7FF,
+            non_increasing=is_method_non_increasing,
+        )
         # state->dcount = 0;
+
         if display:
-            print(prefix + "; Method: 0x%04X (%d times)" % (method, method_count))
-        addr += 4 + method_count * 4
-        return addr
+            print(
+                prefix
+                + "; Method: 0x%04X (%d times)" % (info.method, info.method_count)
+            )
+        addr += 4 + info.method_count * 4
+        return addr, info
 
     print(prefix + "; unknown opcode type")
-    return addr
+    return addr, None
 
 
 class XboxHelper:
@@ -172,16 +193,16 @@ class XboxHelper:
         return False
 
     def disable_pgraph_fifo(self):
-        state_s1 = self.xbox.read_u32(PGRAPH_STATE)
-        self.xbox.write_u32(PGRAPH_STATE, state_s1 & 0xFFFFFFFE)
+        state = self.xbox.read_u32(PGRAPH_STATE)
+        self.xbox.write_u32(PGRAPH_STATE, state & 0xFFFFFFFE)
 
     def wait_until_pgraph_idle(self):
         while self.xbox.read_u32(PGRAPH_STATUS) & 0x00000001:
             time.sleep(0.001)
 
     def enable_pgraph_fifo(self):
-        state_s1 = self.xbox.read_u32(PGRAPH_STATE)
-        self.xbox.write_u32(PGRAPH_STATE, state_s1 | 0x00000001)
+        state = self.xbox.read_u32(PGRAPH_STATE)
+        self.xbox.write_u32(PGRAPH_STATE, state | 0x00000001)
         if self.delay():
             pass
 
@@ -209,16 +230,18 @@ class XboxHelper:
 
     def pause_fifo_pusher(self):
         """Disable the PFIFO pusher"""
-        state_s1 = self.xbox.read_u32(CACHE_PUSH_MASTER_STATE)
-        self.xbox.write_u32(CACHE_PUSH_MASTER_STATE, state_s1 & 0xFFFFFFFE)
+        # Must be kept in sync with method used in kick_fifo.asm
+        state = self.xbox.read_u32(CACHE_PUSH_STATE)
+        self.xbox.write_u32(CACHE_PUSH_STATE, state & 0xFFFFFFFE)
         if self.delay():
             pass
 
     def resume_fifo_pusher(self):
         """Enable the PFIFO pusher"""
-        state_s2 = self.xbox.read_u32(CACHE_PUSH_MASTER_STATE)
+        # Must be kept in sync with method used in kick_fifo.asm
+        state = self.xbox.read_u32(CACHE_PUSH_STATE)
         self.xbox.write_u32(
-            CACHE_PUSH_MASTER_STATE, (state_s2 & 0xFFFFFFFE) | 1
+            CACHE_PUSH_STATE, (state & 0xFFFFFFFE) | 1
         )  # Recover pusher state
         if self.delay():
             pass
@@ -237,34 +260,34 @@ class XboxHelper:
         offset = start
         while offset != end:
             word = self.xbox.read_u32(0x80000000 | offset)
-            offset = parse_command(offset, word, True)
+            offset, _method = parse_command(offset, word, True)
             if offset == 0:
                 break
 
     # FIXME: This works poorly if the method count is not 0
     def print_pb_state(self):
-        v_dma_get_addr = self.xbox.read_u32(DMA_PULL_ADDR)
-        v_dma_put_addr = self.xbox.read_u32(DMA_PUSH_ADDR)
-        v_dma_subroutine = self.xbox.read_u32(DMA_SUBROUTINE)
+        dma_pull_addr = self.xbox.read_u32(DMA_PULL_ADDR)
+        dma_push_addr = self.xbox.read_u32(DMA_PUSH_ADDR)
+        dma_subroutine = self.xbox.read_u32(DMA_SUBROUTINE)
 
         print(
-            "PB-State: 0x%08X / 0x%08X / 0x%08X"
-            % (v_dma_get_addr, v_dma_put_addr, v_dma_subroutine)
+            "PB-State: Pull: 0x%08X  Push: 0x%08X  Sub: 0x%08X"
+            % (dma_pull_addr, dma_push_addr, dma_subroutine)
         )
-        self._dump_pb(v_dma_get_addr, v_dma_put_addr)
+        self._dump_pb(dma_pull_addr, dma_push_addr)
         print()
 
     def print_cache_state(self):
-        v_get_addr = self.xbox.read_u32(CACHE_PULL_ADDR)
-        v_put_addr = self.xbox.read_u32(CACHE_PUSH_ADDR)
+        pull_addr = self.xbox.read_u32(CACHE_PULL_ADDR)
+        push_addr = self.xbox.read_u32(CACHE_PUSH_ADDR)
 
-        v_get_state = self.xbox.read_u32(CACHE_PULL_STATE)
-        v_put_state = self.xbox.read_u32(CACHE_PUSH_STATE)
+        pull_state = self.xbox.read_u32(CACHE_PULL_STATE)
+        push_state = self.xbox.read_u32(CACHE_PUSH_STATE)
 
-        print("CACHE-State: 0x%X / 0x%X" % (v_get_addr, v_put_addr))
+        print("CACHE-State: PULL: 0x%X  PUSH: 0x%X" % (pull_addr, push_addr))
 
-        print("Put / Pusher enabled: %s" % ("Yes" if (v_put_state & 1) else "No"))
-        print("Get / Puller enabled: %s" % ("Yes" if (v_get_state & 1) else "No"))
+        print("Put / Pusher enabled: %s" % ("Yes" if (push_state & 1) else "No"))
+        print("Get / Puller enabled: %s" % ("Yes" if (pull_state & 1) else "No"))
 
         print("Cache:")
         for i in range(128):
@@ -273,25 +296,19 @@ class XboxHelper:
             cache1_data = self.xbox.read_u32(0xFD003804 + i * 8)
 
             output = "  [0x%02X] 0x%04X (0x%08X)" % (i, cache1_method, cache1_data)
-            v_get_offset = i * 8 - v_get_addr
-            if v_get_offset >= 0 and v_get_offset < 8:
-                output += " < get[%d]" % v_get_offset
-            v_put_offset = i * 8 - v_put_addr
-            if v_put_offset >= 0 and v_put_offset < 8:
-                output += " < put[%d]" % v_put_offset
+            pull_offset = i * 8 - pull_addr
+            if pull_offset >= 0 and pull_offset < 8:
+                output += " < get[%d]" % pull_offset
+            push_offset = i * 8 - push_addr
+            if push_offset >= 0 and push_offset < 8:
+                output += " < put[%d]" % push_offset
 
             print(output)
         print()
 
     def print_dma_state(self):
-        v_dma_state = self.xbox.read_u32(DMA_STATE)
-        v_dma_method = v_dma_state & 0x1FFC
-        # v_dma_subchannel = (v_dma_state >> 13) & 7
-        v_dma_method_count = (v_dma_state >> 18) & 0x7FF
-        # v_dma_method_nonincreasing = v_dma_state & 1
-        # higher bits are for error signalling?
-
-        print("v_dma_method: 0x%04X (count: %d)" % (v_dma_method, v_dma_method_count))
+        state = self.parse_dma_state()
+        print("dma_method: 0x%04X (count: %d)" % (state.method, state.method_count))
 
     def fetch_ramht(self):
         ht = self.xbox.read_u32(RAM_HASHTABLE)
@@ -309,6 +326,26 @@ class XboxHelper:
         """Returns the target graphics class."""
         ctx_switch_1 = self.xbox.read_u32(CTX_SWITCH1)
         return ctx_switch_1 & 0xFF
+
+    def parse_dma_state(self):
+        dma_state = self.xbox.read_u32(DMA_STATE)
+        ret = DMAState(
+            non_increasing=dma_state & 0x01,
+            method=(dma_state >> 2) & 0x1FFF,
+            subchannel=(dma_state >> 13) & 0x07,
+            method_count=(dma_state >> 18) & 0x7FF,
+            error=(dma_state >> 29) & 0x07,
+        )
+        return ret
+
+    def get_dma_push_address(self):
+        return self.xbox.read_u32(DMA_PUSH_ADDR)
+
+    def get_dma_pull_address(self):
+        return self.xbox.read_u32(DMA_PULL_ADDR)
+
+    def set_dma_push_address(self, target):
+        self.xbox.write_u32(DMA_PUSH_ADDR, target)
 
 
 def apply_anti_aliasing_factor(surface_anti_aliasing, x, y):

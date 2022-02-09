@@ -1,8 +1,6 @@
 """Provides methods to trace nv2a commands."""
 
-# FIXME: DONOTSUBMIT REMOVE BELOW
-# pylint: disable=fixme
-
+# pylint: disable=line-too-long
 # pylint: disable=consider-using-f-string
 # pylint: disable=missing-function-docstring
 # pylint: disable=too-many-arguments
@@ -10,15 +8,19 @@
 # pylint: disable=too-many-locals
 # pylint: disable=too-many-statements
 
-import atexit
 from collections import defaultdict
 import os
 import struct
 import time
 import traceback
 
+from AbortFlag import AbortFlag
+import ExchangeU32
+from HTMLLog import HTMLLog
 import KickFIFO
+from NV2ALog import NV2ALog
 import Texture
+from Xbox import Xbox
 import XboxHelper
 
 
@@ -34,23 +36,6 @@ SurfaceDumping = True
 DebugPrint = False
 MaxFrames = 0
 # pylint: enable=invalid-name
-
-
-# pylint: disable=invalid-name
-exchange_u32_addr = None
-# pylint: enable=invalid-name
-
-
-def _exchange_u32(xbox, address, value):
-    """Exchanges `value` with the value at `address`, returning the original value."""
-    global exchange_u32_addr
-    if exchange_u32_addr is None:
-        with open("exchange_u32", "rb") as infile:
-            data = infile.read()
-
-        exchange_u32_addr = XboxHelper.load_binary(xbox, data)
-        print("exchange_u32 installed at 0x%08X" % exchange_u32_addr)
-    return xbox.call(exchange_u32_addr, struct.pack("<LL", value, address))["eax"]
 
 
 def _dump_pgraph(xbox):
@@ -97,105 +82,84 @@ def _read_pgraph_rdi(xbox, offset, count):
     return data
 
 
-class HTMLLog:
-    """Manages the HTML log file."""
-
-    def __init__(self, path):
-        self.path = path
-
-        with open(path, "w", encoding="utf8") as logfile:
-            # pylint: disable=line-too-long
-            logfile.write(
-                "<html><head>"
-                "<style>"
-                "body { font-family: sans-serif; background:#333; color: #ccc } "
-                "img { border: 1px solid #FFF; } "
-                "td, tr, table { background: #444; padding: 10px; border:1px solid #888; border-collapse: collapse; }"
-                "</style></head><body><table>\n"
-            )
-            # pylint: enable=line-too-long
-
-        self.log(["<b>#</b>", "<b>Opcode / Method</b>", "..."])
-        atexit.register(self._close_tags)
-
-    def _close_tags(self):
-        with open(self.path, "a", encoding="utf8") as logfile:
-            logfile.write("</table></body></html>")
-
-    def log(self, values):
-        """Append the given values to the HTML log."""
-        with open(self.path, "a", encoding="utf8") as logfile:
-            logfile.write("<tr>")
-            for val in values:
-                logfile.write("<td>%s</td>" % val)
-            logfile.write("</tr>\n")
-
-    def print_log(self, message):
-        """Print the given string and append it to the HTML log."""
-        print(message)
-        self.log([message])
-
-
-class NV2ALog:
-    """Manages the nv2a log file."""
-
-    def __init__(self, path):
-        self.path = path
-
-        with open(self.path, "w", encoding="utf8") as logfile:
-            logfile.write("xemu style NV2A log from nv2a-trace.py")
-
-    def log(self, message):
-        """Append the given string to the nv2a log."""
-        with open(self.path, "a", encoding="utf8") as logfile:
-            logfile.write(message)
-
-    def log_method(self, method_info, data, pre_info, post_info):
-        """Append a line describing the given pgraph call to the nv2a log."""
-        with open(self.path, "a", encoding="utf8") as logfile:
-            logfile.write(
-                "nv2a: pgraph method (%d): 0x%x -> 0x%x (0x%x)\n"
-                % (
-                    method_info["subchannel"],
-                    method_info["object"],
-                    method_info["method"],
-                    data,
-                )
-            )
-
-            if Nv2aLogMethodDetails:
-                logfile.write("Method info:\n")
-                logfile.write("Address: 0x%X\n" % method_info["address"])
-                logfile.write("Method: 0x%X\n" % method_info["method"])
-                logfile.write("Nonincreasing: %d\n" % method_info["nonincreasing"])
-                logfile.write("Subchannel: 0x%X\n" % method_info["subchannel"])
-                logfile.write("data:\n")
-                logfile.write(str(data))
-                logfile.write("\n\n")
-                logfile.write("pre_info: %s\n" % pre_info)
-                logfile.write("post_info: %s\n" % post_info)
-
-
 class Tracer:
     """Performs tracing of the xbox nv2a state."""
 
-    def __init__(self, dma_get_addr, dma_put_addr, xbox, xbox_helper):
+    def __init__(
+        self,
+        dma_pull_addr: int,
+        dma_push_addr: int,
+        xbox: Xbox,
+        xbox_helper: XboxHelper.XboxHelper,
+        abort_flag: AbortFlag,
+    ):
         self.xbox = xbox
         self.xbox_helper = xbox_helper
+        self.abort_flag = abort_flag
         self.html_log = HTMLLog(os.path.join(OutputDir, "debug.html"))
         self.nv2a_log = NV2ALog(os.path.join(OutputDir, "nv2a_log.txt"))
         self.flip_stall_count = 0
         self.command_count = 0
 
-        self.real_dma_get_addr = dma_get_addr
-        self.real_dma_put_addr = dma_put_addr
-        self.target_dma_put_addr = dma_get_addr
+        self.real_dma_pull_addr = dma_pull_addr
+        self.real_dma_push_addr = dma_push_addr
+        self.target_dma_push_addr = dma_pull_addr
 
         self.pgraph_dump = None
 
         # Maps {object : {method: ([pre_call_hooks], [post_call_hooks])} }
         self.method_callbacks = defaultdict(dict)
         self._hook_methods()
+
+    def run(self):
+        """Traces the push buffer until aborted."""
+        bytes_queued = 0
+
+        dma_pull_addr = self.real_dma_pull_addr
+
+        while not self.abort_flag.should_abort:
+            try:
+                dma_pull_addr, unprocessed_bytes = self.process_push_buffer_command(
+                    dma_pull_addr
+                )
+                bytes_queued += unprocessed_bytes
+
+                # time.sleep(0.5)
+
+                # Avoid queuing up too many bytes: while the buffer is being processed,
+                # D3D might fixup the buffer if GET is still too far away.
+                is_empty = dma_pull_addr == self.real_dma_push_addr
+                if is_empty or bytes_queued >= 200:
+                    print(
+                        "Flushing buffer until (0x%08X): real_put 0x%X; bytes_queued: %d"
+                        % (dma_pull_addr, self.real_dma_push_addr, bytes_queued)
+                    )
+                    self.run_fifo(dma_pull_addr)
+                    bytes_queued = 0
+
+                if is_empty:
+                    print("Reached end of buffer with %d bytes queued?!" % bytes_queued)
+                    # break
+
+                # Verify we are where we think we are
+                if bytes_queued == 0:
+                    dma_pull_addr_real = self.xbox_helper.get_dma_pull_address()
+                    print(
+                        "Verifying hw (0x%08X) is at parser (0x%08X)"
+                        % (dma_pull_addr_real, dma_pull_addr)
+                    )
+                    try:
+                        assert dma_pull_addr_real == dma_pull_addr
+                    except:
+                        self.xbox_helper.print_pb_state()
+                        raise
+
+            except MaxFlipExceeded:
+                print("Max flip count reached")
+                self.abort_flag.abort()
+            except:  # pylint: disable=bare-except
+                traceback.print_exc()
+                self.abort_flag.abort()
 
     def hook_method(self, obj, method, pre_hooks, post_hooks):
         """Registers pre- and post-run hooks for the given method."""
@@ -210,39 +174,85 @@ class Tracer:
     def recorded_command_count(self):
         return self.command_count
 
-    def run_fifo(self, put_target):
-        # Queue the commands
-        self._write_put(put_target)
+    def _exchange_dma_push_address(self, target):
+        """Sets the DMA_PUSH_ADDR to the given target, storing the old value.
+
+        self.real_dma_push_addr = Xbox.DMA_PUSH_ADDR
+        self.target_dma_push_addr = target
+        Xbox.DMA_PUSH_ADDR = target
+        """
+        prev_target = self.target_dma_push_addr
+        prev_real = self.real_dma_push_addr
+
+        real = ExchangeU32.exchange_u32(self.xbox, XboxHelper.DMA_PUSH_ADDR, target)
+        self.target_dma_push_addr = target
+
+        # It must point where we pointed previously, otherwise something is broken
+        if real != prev_target:
+            self.html_log.print_log(
+                "New real PUT (0x%08X -> 0x%08X) while changing hook 0x%08X -> 0x%08X"
+                % (prev_real, real, prev_target, target)
+            )
+            put_s1 = self.xbox.read_u32(XboxHelper.CACHE_PUSH_STATE)
+            if put_s1 & 1:
+                print("PUT was modified and pusher was already active!")
+                time.sleep(60.0)
+            self.real_dma_push_addr = real
+            # traceback.print_stack()
+
+    def run_fifo(self, pull_addr_target):
+        """Runs the PFIFO until the DMA_PULL_ADDR equals the given address."""
+
+        # Mark the pushbuffer as empty by setting the push address to the target pull
+        # address.
+        self._exchange_dma_push_address(pull_addr_target)
+        assert self.target_dma_push_addr == pull_addr_target
 
         # FIXME: we can avoid this read in some cases, as we should know where we are
-        self.real_dma_get_addr = self.xbox.read_u32(XboxHelper.DMA_PULL_ADDR)
+        self.real_dma_pull_addr = self.xbox_helper.get_dma_pull_address()
 
         self.html_log.log(
             [
                 "WARNING",
                 "Running FIFO (GET: 0x%08X -- PUT: 0x%08X / 0x%08X)"
-                % (self.real_dma_get_addr, put_target, self.real_dma_put_addr),
+                % (self.real_dma_pull_addr, pull_addr_target, self.real_dma_push_addr),
             ]
         )
 
         # Loop while this command is being ran.
         # This is necessary because a whole command might not fit into CACHE.
         # So we have to process it chunk by chunk.
-        # FIXME: This used to be a check which made sure that `v_dma_get_addr` did
+        # FIXME: This used to be a check which made sure that `dma_pull_addr` did
         #       never leave the known PB.
         iterations_with_no_change = 0
-        while self.real_dma_get_addr != put_target:
+        while self.real_dma_pull_addr != pull_addr_target:
             if iterations_with_no_change and not iterations_with_no_change % 1000:
                 print(
-                    "Warning: went %d iterations with no change to DMA_GET_ADDR 0x%X "
+                    "Warning: %d iterations with no change to DMA_PULL_ADDR 0x%X "
                     " target 0x%X"
-                    % (iterations_with_no_change, self.real_dma_get_addr, put_target)
+                    % (
+                        iterations_with_no_change,
+                        self.real_dma_pull_addr,
+                        pull_addr_target,
+                    )
                 )
 
             if DebugPrint:
                 print(
                     "At 0x%08X, target is 0x%08X (Real: 0x%08X)"
-                    % (self.real_dma_get_addr, put_target, self.real_dma_put_addr)
+                    % (
+                        self.real_dma_pull_addr,
+                        pull_addr_target,
+                        self.real_dma_push_addr,
+                    )
+                )
+
+                print(
+                    "> PULL ADDR: 0x%X  PUSH: 0x%X"
+                    % (
+                        self.xbox_helper.get_dma_pull_address(),
+                        self.xbox_helper.get_dma_push_address(),
+                    )
                 )
 
             # Disable PGRAPH, so it can't run anything from CACHE.
@@ -252,30 +262,34 @@ class Tracer:
             # This scope should be atomic.
             # FIXME: Avoid running bad code, if the PUT was modified sometime during
             # this command.
-            self._write_put(self.target_dma_put_addr)
+            self._exchange_dma_push_address(pull_addr_target)
 
+            # FIXME: xemu does not seem to implement the CACHE behavior
+            # This leads to an infinite loop as the kick fails to populate the cache.
             # Kick commands into CACHE.
-            kicked = KickFIFO.kick(self.xbox, self.target_dma_put_addr)
+            kicked = KickFIFO.kick(self.xbox, pull_addr_target)
             if not kicked:
                 print("Warning: FIFO kick failed")
 
-            # print("PUT STATE 0x%08X" % xbox.read_u32(0xFD003220))
+            if DebugPrint:
+                self.xbox_helper.print_cache_state()
 
             # Run the commands we have moved to CACHE, by enabling PGRAPH.
             self.xbox_helper.enable_pgraph_fifo()
+            time.sleep(0.01)
 
             # Get the updated PB address.
-            new_get_addr = self.xbox.read_u32(XboxHelper.DMA_PULL_ADDR)
-            if new_get_addr == self.real_dma_get_addr:
+            new_get_addr = self.xbox_helper.get_dma_pull_address()
+            if new_get_addr == self.real_dma_pull_addr:
                 iterations_with_no_change += 1
             else:
-                self.real_dma_get_addr = new_get_addr
+                self.real_dma_pull_addr = new_get_addr
                 iterations_with_no_change = 0
 
         # This is just to confirm that nothing was modified in the final chunk
-        self._write_put(self.target_dma_put_addr)
+        self._exchange_dma_push_address(pull_addr_target)
 
-    def dump_textures(self, data, *args):
+    def dump_textures(self, _data, *_args):
         if not PixelDumping or not TextureDumping:
             return []
 
@@ -309,7 +323,7 @@ class Tracer:
 
         return extra_html
 
-    def dump_surfaces(self, data, *args):
+    def dump_surfaces(self, _data, *_args):
         if not PixelDumping or not SurfaceDumping:
             return []
 
@@ -362,7 +376,7 @@ class Tracer:
 
         format_color = (draw_format >> 12) & 0xF
         # FIXME: Support 3D surfaces.
-        format_depth = (draw_format >> 18) & 0x3
+        _format_depth = (draw_format >> 18) & 0x3
 
         if not format_color:
             print("Warning: Invalid color format, skipping surface dump.")
@@ -467,7 +481,7 @@ class Tracer:
             0x97, NV097_BACK_END_WRITE_SEMAPHORE_RELEASE, [], [self.dump_surfaces]
         )
 
-    def _handle_begin(self, data, *args):
+    def _handle_begin(self, data, *_args):
 
         # Avoid handling End
         if data == 0:
@@ -490,12 +504,12 @@ class Tracer:
         extra_html += self.dump_surfaces(data, *args)
         return extra_html
 
-    def _begin_pgraph_recording(self, data, *args):
+    def _begin_pgraph_recording(self, _data, *_args):
         self.pgraph_dump = _dump_pgraph(self.xbox)
         self.html_log.log(["", "", "", "", "Dumped PGRAPH for later"])
         return []
 
-    def _end_pgraph_recording(self, data, *args):
+    def _end_pgraph_recording(self, _data, *_args):
         # Debug feature to understand PGRAPH
         if self.pgraph_dump is not None:
             new_pgraph_dump = _dump_pgraph(self.xbox)
@@ -609,12 +623,12 @@ class Tracer:
                         ]
                     )
 
-            pgraph_dump = None
+            self.pgraph_dump = None
             self.html_log.log(["", "", "", "", "Finished PGRAPH comparison"])
 
         return []
 
-    def _handle_flip_stall(self, data, *args):
+    def _handle_flip_stall(self, _data, *_args):
         print("Flip (Stall)")
         self.flip_stall_count += 1
 
@@ -655,69 +669,43 @@ class Tracer:
                 + post_info
             )
 
-    def _write_put(self, target):
-
-        prev_target = self.target_dma_put_addr
-        prev_real = self.real_dma_put_addr
-
-        real = _exchange_u32(self.xbox, XboxHelper.DMA_PUSH_ADDR, target)
-        self.target_dma_put_addr = target
-
-        # It must point where we pointed previously, otherwise something is broken
-        if real != prev_target:
-            self.html_log.print_log(
-                "New real PUT (0x%08X -> 0x%08X) while changing hook 0x%08X -> 0x%08X"
-                % (prev_real, real, prev_target, target)
-            )
-            put_s1 = self.xbox.read_u32(XboxHelper.CACHE_PUSH_STATE)
-            if put_s1 & 1:
-                print("PUT was modified and pusher was already active!")
-                time.sleep(60.0)
-            self.real_dma_put_addr = real
-            # traceback.print_stack()
-
-    def _parse_push_buffer_command(self, get_addr):
-        global DebugPrint
-
+    def _parse_push_buffer_command(self, pull_addr):
         # Retrieve command type from Xbox
-        word = self.xbox.read_u32(0x80000000 | get_addr)
-        self.html_log.log(["", "", "", "@0x%08X: DATA: 0x%08X" % (get_addr, word)])
+        word = self.xbox.read_u32(0x80000000 | pull_addr)
+        self.html_log.log(["", "", "", "@0x%08X: DATA: 0x%08X" % (pull_addr, word)])
 
         # FIXME: Get where this command ends
-        next_parser_addr = XboxHelper.parse_command(get_addr, word, DebugPrint)
+        next_parser_addr, info = XboxHelper.parse_command(pull_addr, word, DebugPrint)
 
         # If we don't know where this command ends, we have to abort.
-        if next_parser_addr == 0:
-            return None, 0
+        if not next_parser_addr:
+            raise Exception(
+                "Failed to process command at 0x%X = 0x%X" % (pull_addr, word)
+            )
 
-        # Check which method it is.
-        if not (word & 0xE0030003) or (word & 0xE0030003) == 0x40000000:
-            # methods
-            method = word & 0x1FFF
-            subchannel = (word >> 13) & 7
-            method_count = (word >> 18) & 0x7FF
-            method_nonincreasing = word & 0x40000000
-
+        if info:
             method_info = {}
-            method_info["address"] = get_addr
+            method_info["address"] = pull_addr
             method_info["object"] = self.xbox_helper.fetch_graphics_class()
-            method_info["method"] = method
-            method_info["nonincreasing"] = method_nonincreasing
-            method_info["subchannel"] = subchannel
+            method_info["method"] = info.method
+            method_info["nonincreasing"] = info.non_increasing
+            method_info["subchannel"] = info.subchannel
+            method_info["method_count"] = info.method_count
 
             # Download this command from Xbox
-            if method_count == 0:
+            if not info.method_count:
                 # Halo: CE has cases where method_count is 0?!
                 self.html_log.print_log(
-                    "Warning: Command 0x%X with method_count == 0\n" % method
+                    "Warning: Command 0x%X with method_count == 0\n" % info.method
                 )
                 data = []
             else:
-                command = self.xbox.read(0x80000000 | (get_addr + 4), method_count * 4)
+                parameters = self.xbox.read(
+                    0x80000000 | (pull_addr + 4), info.method_count * 4
+                )
+                data = struct.unpack("<%dL" % info.method_count, parameters)
+                assert len(data) == info.method_count
 
-                # FIXME: Unpack all of them?
-                data = struct.unpack("<%dL" % method_count, command)
-                assert len(data) == method_count
             method_info["data"] = data
         else:
             method_info = None
@@ -731,7 +719,7 @@ class Tracer:
 
         nv_obj = method_info["object"]
         method = method_info["method"]
-        for data in method_info["data"]:
+        for _data in method_info["data"]:
             pre_callbacks_this, post_callbacks_this = self._filter_pgraph_method(
                 nv_obj, method
             )
@@ -745,7 +733,7 @@ class Tracer:
 
         return pre_callbacks, post_callbacks
 
-    def _record_push_buffer_command(self, address, method_info, pre_info, post_info):
+    def _record_push_buffer_command(self, method_info, pre_info, post_info):
         orig_method = method_info["method"]
 
         self.html_log.log(["%d" % self.command_count, "%s" % method_info])
@@ -761,21 +749,21 @@ class Tracer:
         method_info["method"] = orig_method
         self.command_count += 1
 
-    def process_push_buffer_command(self, parser_addr):
+    def process_push_buffer_command(self, pull_addr):
         self.html_log.log(
             [
                 "WARNING",
                 "Starting FIFO parsing from 0x%08X -- 0x%08X"
-                % (parser_addr, self.real_dma_put_addr),
+                % (pull_addr, self.real_dma_push_addr),
             ]
         )
 
-        if parser_addr == self.real_dma_put_addr:
+        if pull_addr == self.real_dma_push_addr:
             unprocessed_bytes = 0
         else:
 
             # Filter commands and check where it wants to go to
-            method_info, post_addr = self._parse_push_buffer_command(parser_addr)
+            method_info, post_addr = self._parse_push_buffer_command(pull_addr)
 
             # We have a problem if we can't tell where to go next
             assert post_addr
@@ -799,7 +787,7 @@ class Tracer:
                 if len(pre_callbacks) > 0:
 
                     # Go where we want to go
-                    self.run_fifo(parser_addr)
+                    self.run_fifo(pull_addr)
 
                     # Do the pre callbacks before running the command
                     # FIXME: assert we are where we wanted to be
@@ -811,7 +799,7 @@ class Tracer:
                 if len(post_callbacks) > 0:
 
                     # If we reached target, we can't step again without leaving valid buffer
-                    assert parser_addr != self.real_dma_put_addr
+                    assert pull_addr != self.real_dma_push_addr
 
                     # Go where we want to go (equivalent to step)
                     self.run_fifo(post_addr)
@@ -824,22 +812,20 @@ class Tracer:
                         post_info += callback(method_info["data"][0])
 
                 # Add the pushbuffer command to log
-                self._record_push_buffer_command(
-                    parser_addr, method_info, pre_info, post_info
-                )
+                self._record_push_buffer_command(method_info, pre_info, post_info)
 
             # Move parser to the next instruction
-            parser_addr = post_addr
+            pull_addr = post_addr
 
         self.html_log.log(
             [
                 "WARNING",
                 "Sucessfully finished FIFO parsing 0x%08X -- 0x%08X (%d bytes unprocessed)"
-                % (parser_addr, self.real_dma_put_addr, unprocessed_bytes),
+                % (pull_addr, self.real_dma_push_addr, unprocessed_bytes),
             ]
         )
 
-        return parser_addr, unprocessed_bytes
+        return pull_addr, unprocessed_bytes
 
     def _write(self, suffix, contents):
         out_path = os.path.join(OutputDir, "command%d_" % self.command_count) + suffix
