@@ -5,6 +5,7 @@
 # pylint: disable=chained-comparison
 
 import atexit
+import struct
 from collections import namedtuple
 from typing import Optional
 from typing import Tuple
@@ -86,6 +87,9 @@ CACHE_PUSH_ADDR = _PFIFO(NV_PFIFO_CACHE1_PUT)
 # CACHE read address
 NV_PFIFO_CACHE1_GET = 0x00001270
 CACHE_PULL_ADDR = _PFIFO(NV_PFIFO_CACHE1_GET)
+
+NV_PFIFO_CACHE1_METHOD = 0x00001800
+CACHE1_METHOD = _PFIFO(NV_PFIFO_CACHE1_METHOD)
 
 NV_PFIFO_RAMHT = 0x00000210
 RAM_HASHTABLE = _PFIFO(NV_PFIFO_RAMHT)
@@ -246,14 +250,15 @@ class XboxHelper:
         if self.delay():
             pass
 
-    def allow_populate_fifo_cache(self):
+    def allow_populate_fifo_cache(self, wait_time=0.05):
         """Temporarily enable the PFIFO pusher to populate the CACHE
 
         It is assumed that the pusher was previously paused, and it will be paused on
         exit.
         """
         self.resume_fifo_pusher()
-        time.sleep(0.05)
+        if wait_time:
+            time.sleep(wait_time)
         self.pause_fifo_pusher()
 
     def _dump_pb(self, start, end):
@@ -277,7 +282,7 @@ class XboxHelper:
         self._dump_pb(dma_pull_addr, dma_push_addr)
         print()
 
-    def print_cache_state(self):
+    def print_cache_state(self, print_contents=False):
         pull_addr = self.xbox.read_u32(CACHE_PULL_ADDR)
         push_addr = self.xbox.read_u32(CACHE_PUSH_ADDR)
 
@@ -289,21 +294,24 @@ class XboxHelper:
         print("Put / Pusher enabled: %s" % ("Yes" if (push_state & 1) else "No"))
         print("Get / Puller enabled: %s" % ("Yes" if (pull_state & 1) else "No"))
 
-        print("Cache:")
-        for i in range(128):
+        if print_contents:
+            print("Cache:")
+            # Each CACHE entry is a pair of 32-bit integers and there are 128 entries.
+            methods_and_data = self.xbox.read(CACHE1_METHOD, 8 * 128)
 
-            cache1_method = self.xbox.read_u32(0xFD003800 + i * 8)
-            cache1_data = self.xbox.read_u32(0xFD003804 + i * 8)
+            for i in range(128):
+                cache1_method, cache1_data = struct.unpack("<LL", methods_and_data[:8])
+                methods_and_data = methods_and_data[8:]
 
-            output = "  [0x%02X] 0x%04X (0x%08X)" % (i, cache1_method, cache1_data)
-            pull_offset = i * 8 - pull_addr
-            if pull_offset >= 0 and pull_offset < 8:
-                output += " < get[%d]" % pull_offset
-            push_offset = i * 8 - push_addr
-            if push_offset >= 0 and push_offset < 8:
-                output += " < put[%d]" % push_offset
+                output = "  [0x%02X] 0x%04X (0x%08X)" % (i, cache1_method, cache1_data)
+                pull_offset = i * 8 - pull_addr
+                if pull_offset >= 0 and pull_offset < 8:
+                    output += " < get[%d]" % pull_offset
+                push_offset = i * 8 - push_addr
+                if push_offset >= 0 and push_offset < 8:
+                    output += " < put[%d]" % push_offset
 
-            print(output)
+                print(output)
         print()
 
     def print_dma_state(self):
