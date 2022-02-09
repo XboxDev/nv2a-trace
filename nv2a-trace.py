@@ -61,15 +61,14 @@ def _wait_for_stable_push_buffer_state(xbox, xbox_helper):
         xbox_helper.wait_until_pgraph_idle()
 
         # Kick the pusher, so that it fills the CACHE.
-        xbox_helper.resume_fifo_pusher()
-        xbox_helper.pause_fifo_pusher()
+        xbox_helper.allow_populate_fifo_cache()
 
         # Now drain the CACHE.
         xbox_helper.enable_pgraph_fifo()
 
         # Check out where the PB currently is and where it was supposed to go.
-        v_dma_put_addr_real = xbox.read_u32(XboxHelper.DMA_PUT_ADDR)
-        v_dma_get_addr = xbox.read_u32(XboxHelper.DMA_GET_ADDR)
+        v_dma_put_addr_real = xbox.read_u32(XboxHelper.DMA_PUSH_ADDR)
+        v_dma_get_addr = xbox.read_u32(XboxHelper.DMA_PULL_ADDR)
 
         # Check if we have any methods left to run and skip those.
         v_dma_state = xbox.read_u32(XboxHelper.DMA_STATE)
@@ -78,7 +77,7 @@ def _wait_for_stable_push_buffer_state(xbox, xbox_helper):
 
         # Hide all commands from the PB by setting PUT = GET.
         v_dma_put_addr_target = v_dma_get_addr
-        xbox.write_u32(XboxHelper.DMA_PUT_ADDR, v_dma_put_addr_target)
+        xbox.write_u32(XboxHelper.DMA_PUSH_ADDR, v_dma_put_addr_target)
 
         # Resume pusher - The PB can't run yet, as it has no commands to process.
         xbox_helper.resume_fifo_pusher()
@@ -91,8 +90,8 @@ def _wait_for_stable_push_buffer_state(xbox, xbox_helper):
 
         time.sleep(1.0)
 
-        v_dma_put_addr_target_check = xbox.read_u32(XboxHelper.DMA_PUT_ADDR)
-        v_dma_get_addr_check = xbox.read_u32(XboxHelper.DMA_GET_ADDR)
+        v_dma_put_addr_target_check = xbox.read_u32(XboxHelper.DMA_PUSH_ADDR)
+        v_dma_get_addr_check = xbox.read_u32(XboxHelper.DMA_PULL_ADDR)
 
         # We want the PB to be paused
         if v_dma_get_addr_check != v_dma_put_addr_target_check:
@@ -145,7 +144,7 @@ def _run(xbox, xbox_helper, v_dma_get_addr, trace):
 
             # Verify we are where we think we are
             if bytes_queued == 0:
-                v_dma_get_addr_real = xbox.read_u32(XboxHelper.DMA_GET_ADDR)
+                v_dma_get_addr_real = xbox.read_u32(XboxHelper.DMA_PULL_ADDR)
                 print(
                     "Verifying hw (0x%08X) is at parser (0x%08X)"
                     % (v_dma_get_addr_real, v_dma_get_addr)
@@ -255,7 +254,7 @@ def main(args):
     _run(xbox, xbox_helper, v_dma_get_addr, trace)
 
     # Recover the real address
-    xbox.write_u32(XboxHelper.DMA_PUT_ADDR, trace.real_dma_put_addr)
+    xbox.write_u32(XboxHelper.DMA_PUSH_ADDR, trace.real_dma_put_addr)
 
     print("\n\nFinished PB\n\n")
 

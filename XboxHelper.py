@@ -7,6 +7,9 @@
 import atexit
 import time
 
+# For general information on PFIFO, see
+# https://envytools.readthedocs.io/en/latest/hw/fifo/intro.html
+
 # mmio blocks
 NV2A_MMIO_BASE = 0xFD000000
 BLOCK_PMC = 0x000000
@@ -39,34 +42,44 @@ def _PGRAPH(addr):
     return NV2A_MMIO_BASE + BLOCK_PGRAPH + addr
 
 
+# Pushbuffer state
 NV_PFIFO_CACHE1_DMA_STATE = 0x00001228
 DMA_STATE = _PFIFO(NV_PFIFO_CACHE1_DMA_STATE)
 
+# Pushbuffer write address
 NV_PFIFO_CACHE1_DMA_PUT = 0x00001240
-DMA_PUT_ADDR = _PFIFO(NV_PFIFO_CACHE1_DMA_PUT)
+DMA_PUSH_ADDR = _PFIFO(NV_PFIFO_CACHE1_DMA_PUT)
 
+# Pushbuffer read address
 NV_PFIFO_CACHE1_DMA_GET = 0x00001244
-DMA_GET_ADDR = _PFIFO(NV_PFIFO_CACHE1_DMA_GET)
+DMA_PULL_ADDR = _PFIFO(NV_PFIFO_CACHE1_DMA_GET)
 
 NV_PFIFO_CACHE1_DMA_SUBROUTINE = 0x0000124C
 DMA_SUBROUTINE = _PFIFO(NV_PFIFO_CACHE1_DMA_SUBROUTINE)
 
-NV_PFIFO_CACHE1_PUT = 0x00001210
-PUT_ADDR = _PFIFO(NV_PFIFO_CACHE1_PUT)
+NV_PFIFO_CACHE1_PUSH0 = 0x00001200
+CACHE_PUSH_MASTER_STATE = _PFIFO(NV_PFIFO_CACHE1_PUSH0)
 
+# CACHE write state
 NV_PFIFO_CACHE1_DMA_PUSH = 0x00001220
-PUT_STATE = _PFIFO(NV_PFIFO_CACHE1_DMA_PUSH)
+CACHE_PUSH_STATE = _PFIFO(NV_PFIFO_CACHE1_DMA_PUSH)
 
-NV_PFIFO_CACHE1_GET = 0x00001270
-GET_ADDR = _PFIFO(NV_PFIFO_CACHE1_GET)
-
+# CACHE read state
 NV_PFIFO_CACHE1_PULL0 = 0x00001250
-GET_STATE = _PFIFO(NV_PFIFO_CACHE1_PULL0)
+CACHE_PULL_STATE = _PFIFO(NV_PFIFO_CACHE1_PULL0)
+
+# CACHE write address
+NV_PFIFO_CACHE1_PUT = 0x00001210
+CACHE_PUSH_ADDR = _PFIFO(NV_PFIFO_CACHE1_PUT)
+
+# CACHE read address
+NV_PFIFO_CACHE1_GET = 0x00001270
+CACHE_PULL_ADDR = _PFIFO(NV_PFIFO_CACHE1_GET)
 
 NV_PFIFO_RAMHT = 0x00000210
 RAM_HASHTABLE = _PFIFO(NV_PFIFO_RAMHT)
 
-NV_PGRAPH_CTX_SWITCH1 = 0x014C
+NV_PGRAPH_CTX_SWITCH1 = 0x0000014C
 CTX_SWITCH1 = _PGRAPH(NV_PGRAPH_CTX_SWITCH1)
 
 NV_PGRAPH_FIFO = 0x00000720
@@ -164,7 +177,7 @@ class XboxHelper:
 
     def wait_until_pgraph_idle(self):
         while self.xbox.read_u32(PGRAPH_STATUS) & 0x00000001:
-            pass
+            time.sleep(0.001)
 
     def enable_pgraph_fifo(self):
         state_s1 = self.xbox.read_u32(PGRAPH_STATE)
@@ -172,51 +185,53 @@ class XboxHelper:
         if self.delay():
             pass
 
-    def wait_until_pusher_idle(self):
-        while self.xbox.read_u32(GET_STATE) & (1 << 4):
-            pass
-
     def pause_fifo_puller(self):
-        # Idle the puller and pusher
-        state_s1 = self.xbox.read_u32(GET_STATE)
-        self.xbox.write_u32(GET_STATE, state_s1 & 0xFFFFFFFE)
+        """Disable the PFIFO puller"""
+        state_s1 = self.xbox.read_u32(CACHE_PULL_STATE)
+        self.xbox.write_u32(CACHE_PULL_STATE, state_s1 & 0xFFFFFFFE)
         if self.delay():
             pass
         # print("Puller State was 0x" + format(state_s1, '08X'))
 
-    def pause_fifo_pusher(self):
-        state_s1 = self.xbox.read_u32(PUT_STATE)
-        self.xbox.write_u32(PUT_STATE, state_s1 & 0xFFFFFFFE)
-        if self.delay():
-            pass
-        if False:
-            state_s1 = self.xbox.read_u32(0xFD003200)
-            self.xbox.write_u32(0xFD003200, state_s1 & 0xFFFFFFFE)
-            if self.delay():
-                pass
-            # print("Pusher State was 0x" + format(state_s1, '08X'))
-
     def resume_fifo_puller(self):
-        # Resume puller and pusher
-        state_s2 = self.xbox.read_u32(GET_STATE)
+        """Enable the PFIFO puller"""
+        state_s2 = self.xbox.read_u32(CACHE_PULL_STATE)
         self.xbox.write_u32(
-            GET_STATE, (state_s2 & 0xFFFFFFFE) | 1
+            CACHE_PULL_STATE, (state_s2 & 0xFFFFFFFE) | 1
         )  # Recover puller state
         if self.delay():
             pass
 
+    def wait_until_pusher_idle(self):
+        """Busy wait until the PFIFO pusher stops being busy"""
+        while self.xbox.read_u32(CACHE_PUSH_STATE) & (1 << 4):
+            pass
+
+    def pause_fifo_pusher(self):
+        """Disable the PFIFO pusher"""
+        state_s1 = self.xbox.read_u32(CACHE_PUSH_MASTER_STATE)
+        self.xbox.write_u32(CACHE_PUSH_MASTER_STATE, state_s1 & 0xFFFFFFFE)
+        if self.delay():
+            pass
+
     def resume_fifo_pusher(self):
-        if False:
-            state_s2 = self.xbox.read_u32(0xFD003200)
-            self.xbox.write_u32(0xFD003200, state_s2 & 0xFFFFFFFE | 1)
-            if self.delay():
-                pass
-        state_s2 = self.xbox.read_u32(PUT_STATE)
+        """Enable the PFIFO pusher"""
+        state_s2 = self.xbox.read_u32(CACHE_PUSH_MASTER_STATE)
         self.xbox.write_u32(
-            PUT_STATE, (state_s2 & 0xFFFFFFFE) | 1
+            CACHE_PUSH_MASTER_STATE, (state_s2 & 0xFFFFFFFE) | 1
         )  # Recover pusher state
         if self.delay():
             pass
+
+    def allow_populate_fifo_cache(self):
+        """Temporarily enable the PFIFO pusher to populate the CACHE
+
+        It is assumed that the pusher was previously paused, and it will be paused on
+        exit.
+        """
+        self.resume_fifo_pusher()
+        time.sleep(0.05)
+        self.pause_fifo_pusher()
 
     def _dump_pb(self, start, end):
         offset = start
@@ -228,8 +243,8 @@ class XboxHelper:
 
     # FIXME: This works poorly if the method count is not 0
     def print_pb_state(self):
-        v_dma_get_addr = self.xbox.read_u32(DMA_GET_ADDR)
-        v_dma_put_addr = self.xbox.read_u32(DMA_PUT_ADDR)
+        v_dma_get_addr = self.xbox.read_u32(DMA_PULL_ADDR)
+        v_dma_put_addr = self.xbox.read_u32(DMA_PUSH_ADDR)
         v_dma_subroutine = self.xbox.read_u32(DMA_SUBROUTINE)
 
         print(
@@ -240,11 +255,11 @@ class XboxHelper:
         print()
 
     def print_cache_state(self):
-        v_get_addr = self.xbox.read_u32(GET_ADDR)
-        v_put_addr = self.xbox.read_u32(PUT_ADDR)
+        v_get_addr = self.xbox.read_u32(CACHE_PULL_ADDR)
+        v_put_addr = self.xbox.read_u32(CACHE_PUSH_ADDR)
 
-        v_get_state = self.xbox.read_u32(GET_STATE)
-        v_put_state = self.xbox.read_u32(PUT_STATE)
+        v_get_state = self.xbox.read_u32(CACHE_PULL_STATE)
+        v_put_state = self.xbox.read_u32(CACHE_PUSH_STATE)
 
         print("CACHE-State: 0x%X / 0x%X" % (v_get_addr, v_put_addr))
 
