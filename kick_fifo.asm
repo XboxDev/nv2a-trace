@@ -2,49 +2,75 @@
 
 bits 32
 
+%define CACHE_PUSH_MASTER_STATE     0xFD003200
+%define CACHE_PUSH_STATE            0xFD003220
+%define DMA_PUSH_ADDR               0xFD003240
+%define DMA_PULL_ADDR               0xFD003244
+
 kick_fifo:
 
-; Load expected_put into reg
-mov edx, dword [esp+4]
+push ebp
+mov ebp, esp
+sub esp, 4
+push ebx
+
+; Load `expected_push` into EDX
+mov edx, dword [ebp+8]
 
 ; Avoid any other CPU stuff overwriting stuff in this risky section
 cli
 
-mov eax, 0xBAD
-
-; Check if DMA_PUT_ADDR is what it must be, or abort otherwise
-cmp edx, dword [0xFD003240]
-jne skip
-
-mov eax, 0x1337C0DE
+; if (DMA_PUSH_ADDR != expected_push) return 0xBAD0000
+mov eax, 0xBAD0000
+cmp edx, dword [DMA_PUSH_ADDR]
+jne done
 
 ; resume_fifo_pusher(xbox):
-;s2 = xbox.read_u32(PUT_STATE)
-;xbox.write_u32(PUT_STATE, (s2 & 0xFFFFFFFE) | 1) # Recover pusher state
-or dword [0xFD003220], 0x00000001
+;state = xbox.read_u32(CACHE_PUSH_STATE)
+;xbox.write_u32(CACHE_PUSH_STATE, state | DMA_PUSH_ACCESS)
+or dword [CACHE_PUSH_STATE], 0x00000001
 
-;FIXME: Do a short busy loop? what if GPU does not find enough time to run?
+; Do a short busy loop. Ideally this would wait forever until the push buffer becomes
+; empty, but it may cause a timeout for the invoker dependent on the interface being
+; used.
 
-; pause_fifo_pusher(xbox):
-;s1 = xbox.read_u32(PUT_STATE)
-;xbox.write_u32(PUT_STATE, s1 & 0xFFFFFFFE)
+mov ecx, 0x2000
 
 wait_idle:
-mov ecx, dword [0xFD003220]
 
-# Make sure that pushbuffer is empty before we hand control back
-test ecx, 0x100
+dec ecx
+jz wait_failed
+
+; if ([NV_PFIFO_CACHE1_DMA_PUSH] & 0x100) goto wait_idle;
+mov ebx, dword [CACHE_PUSH_STATE]
+test ebx, 0x100
 jnz wait_idle
 
-and ecx, 0xFFFFFFFE
-mov dword [0xFD003220], ecx
+mov eax, 0x1337C0DE
+jmp pause_pusher
 
-; Mark run as very bad if PUT changed
-cmp edx, dword [0xFD003240]
-je skip
+wait_failed:
+; "BUSY"
+mov eax, 0x32555359
+
+pause_pusher:
+; pause_fifo_pusher(xbox):
+;
+;state = xbox.read_u32(CACHE_PUSH_STATE)
+;xbox.write_u32(CACHE_PUSH_STATE, state & ~DMA_PUSH_ACCESS)
+and ebx, 0xFFFFFFFE
+mov dword [CACHE_PUSH_STATE], ebx
+
+; if (DMA_PUSH_ADDR != `expected_push`) return 0xBADBAD
+cmp edx, dword [DMA_PUSH_ADDR]
+je done
 mov eax, 0xBADBAD
 
-skip:
+done:
+
+pop ebx
+mov esp, ebp
+pop ebp
 
 sti
 ret 4

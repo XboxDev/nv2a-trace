@@ -12,155 +12,89 @@ import os
 import signal
 import sys
 import time
-import traceback
 
-import xboxpy
+from AbortFlag import AbortFlag
+from Xbox import Xbox
 import XboxHelper
 import Trace
 
 # pylint: disable=invalid-name
-abort_now = False
 _enable_experimental_disable_z_compression_and_tiling = True
 # pylint: enable=invalid-name
 
 
-def signal_handler(_signal, _frame):
-    global abort_now
-    if not abort_now:
-        print("Got first SIGINT! Aborting..")
-        abort_now = True
-    else:
-        print("Got second SIGINT! Forcing exit")
-        sys.exit(0)
-
-
-signal.signal(signal.SIGINT, signal_handler)
-
-
-class Xbox:
-    """Trivial wrapper around xboxpy"""
-
-    def __init__(self):
-        self.read_u32 = xboxpy.read_u32
-        self.write_u32 = xboxpy.write_u32
-        self.read = xboxpy.read
-        self.write = xboxpy.write
-        self.call = xboxpy.api.call
-        self.ke = xboxpy.ke
-
-
-def _wait_for_stable_push_buffer_state(xbox, xbox_helper):
+def _wait_for_stable_push_buffer_state(
+    xbox_helper: XboxHelper.XboxHelper, abort_flag: AbortFlag
+):
     """Blocks until the push buffer reaches a stable state."""
 
-    v_dma_get_addr = 0
-    v_dma_put_addr_real = 0
+    dma_pull_addr = 0
+    dma_push_addr_real = 0
 
-    while not abort_now:
+    while not abort_flag.should_abort:
         # Stop consuming CACHE entries.
         xbox_helper.disable_pgraph_fifo()
         xbox_helper.wait_until_pgraph_idle()
 
-        # Kick the pusher, so that it fills the CACHE.
+        # Kick the pusher so that it fills the CACHE.
         xbox_helper.allow_populate_fifo_cache()
 
         # Now drain the CACHE.
         xbox_helper.enable_pgraph_fifo()
 
         # Check out where the PB currently is and where it was supposed to go.
-        v_dma_put_addr_real = xbox.read_u32(XboxHelper.DMA_PUSH_ADDR)
-        v_dma_get_addr = xbox.read_u32(XboxHelper.DMA_PULL_ADDR)
+        dma_push_addr_real = xbox_helper.get_dma_push_address()
+        dma_pull_addr = xbox_helper.get_dma_pull_address()
 
         # Check if we have any methods left to run and skip those.
-        v_dma_state = xbox.read_u32(XboxHelper.DMA_STATE)
-        v_dma_method_count = (v_dma_state >> 18) & 0x7FF
-        v_dma_get_addr += v_dma_method_count * 4
+        state = xbox_helper.parse_dma_state()
+        dma_method_count = state.method_count
+        dma_pull_addr += dma_method_count * 4
 
         # Hide all commands from the PB by setting PUT = GET.
-        v_dma_put_addr_target = v_dma_get_addr
-        xbox.write_u32(XboxHelper.DMA_PUSH_ADDR, v_dma_put_addr_target)
+        dma_push_addr_target = dma_pull_addr
+        xbox_helper.set_dma_push_address(dma_push_addr_target)
 
         # Resume pusher - The PB can't run yet, as it has no commands to process.
         xbox_helper.resume_fifo_pusher()
 
         # We might get issues where the pusher missed our PUT (miscalculated).
-        # This can happen as `v_dma_method_count` is not the most accurate.
+        # This can happen as `dma_method_count` is not the most accurate.
         # Probably because the DMA is halfway through a transfer.
         # So we pause the pusher again to validate our state
         xbox_helper.pause_fifo_pusher()
 
         time.sleep(1.0)
 
-        v_dma_put_addr_target_check = xbox.read_u32(XboxHelper.DMA_PUSH_ADDR)
-        v_dma_get_addr_check = xbox.read_u32(XboxHelper.DMA_PULL_ADDR)
+        dma_push_addr_check = xbox_helper.get_dma_push_address()
+        dma_pull_addr_check = xbox_helper.get_dma_pull_address()
 
-        # We want the PB to be paused
-        if v_dma_get_addr_check != v_dma_put_addr_target_check:
+        # We want the PB to be empty
+        if dma_pull_addr_check != dma_push_addr_check:
             print(
-                "Oops GET (0x%08X) did not reach PUT (0x%08X)!"
-                % (v_dma_get_addr_check, v_dma_put_addr_target_check)
+                "  Pushbuffer not empty - PULL (0x%08X) != PUSH (0x%08X)"
+                % (dma_pull_addr_check, dma_push_addr_check)
             )
             continue
 
         # Ensure that we are at the correct offset
-        if v_dma_put_addr_target_check != v_dma_put_addr_target:
+        if dma_push_addr_check != dma_push_addr_target:
             print(
                 "Oops PUT was modified; got 0x%08X but expected 0x%08X!"
-                % (v_dma_put_addr_target_check, v_dma_put_addr_target)
+                % (dma_push_addr_check, dma_push_addr_target)
             )
             continue
 
         break
 
-    return v_dma_get_addr, v_dma_put_addr_real
+    if abort_flag.should_abort:
+        print("Restoring pfifo state...")
+        xbox_helper.set_dma_push_address(dma_push_addr_real)
+        xbox_helper.enable_pgraph_fifo()
+        xbox_helper.resume_fifo_pusher()
+        xbox_helper.print_enable_states()
 
-
-def _run(xbox, xbox_helper, v_dma_get_addr, trace):
-    """Traces the push buffer until aborted."""
-    global abort_now
-    bytes_queued = 0
-
-    while not abort_now:
-        try:
-            v_dma_get_addr, unprocessed_bytes = trace.process_push_buffer_command(
-                v_dma_get_addr
-            )
-            bytes_queued += unprocessed_bytes
-
-            # time.sleep(0.5)
-
-            # Avoid queuing up too many bytes: while the buffer is being processed,
-            # D3D might fixup the buffer if GET is still too far away.
-            if v_dma_get_addr == trace.real_dma_put_addr or bytes_queued >= 200:
-                print(
-                    "Flushing buffer until (0x%08X): real_put 0x%X; bytes_queued: %d"
-                    % (v_dma_get_addr, trace.real_dma_put_addr, bytes_queued)
-                )
-                trace.run_fifo(v_dma_get_addr)
-                bytes_queued = 0
-
-            if v_dma_get_addr == trace.real_dma_put_addr:
-                print("Reached end of buffer with %d bytes queued?!" % bytes_queued)
-                # break
-
-            # Verify we are where we think we are
-            if bytes_queued == 0:
-                v_dma_get_addr_real = xbox.read_u32(XboxHelper.DMA_PULL_ADDR)
-                print(
-                    "Verifying hw (0x%08X) is at parser (0x%08X)"
-                    % (v_dma_get_addr_real, v_dma_get_addr)
-                )
-                try:
-                    assert v_dma_get_addr_real == v_dma_get_addr
-                except:
-                    xbox_helper.print_pb_state()
-                    raise
-
-        except Trace.MaxFlipExceeded:
-            print("Max flip count reached")
-            abort_now = True
-        except:  # pylint: disable=bare-except
-            traceback.print_exc()
-            abort_now = True
+    return dma_pull_addr, dma_push_addr_real
 
 
 def experimental_disable_z_compression_and_tiling(xbox):
@@ -220,17 +154,28 @@ def main(args):
 
     Trace.MaxFrames = args.max_flip
 
-    global abort_now  # pylint: disable=C0103
     xbox = Xbox()
     xbox_helper = XboxHelper.XboxHelper(xbox)
 
+    abort_flag = AbortFlag()
+
+    def signal_handler(_signal, _frame):
+        if not abort_flag.should_abort:
+            print("Got first SIGINT! Aborting..")
+            abort_flag.abort()
+        else:
+            print("Got second SIGINT! Forcing exit")
+            sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+
     print("\n\nAwaiting stable PB state\n\n")
-    v_dma_get_addr, v_dma_put_addr_real = _wait_for_stable_push_buffer_state(
-        xbox, xbox_helper
+    dma_pull_addr, dma_push_addr = _wait_for_stable_push_buffer_state(
+        xbox_helper, abort_flag
     )
 
-    if not v_dma_get_addr or not v_dma_put_addr_real:
-        if not abort_now:
+    if not dma_pull_addr or not dma_push_addr or abort_flag.should_abort:
+        if not abort_flag.should_abort:
             print("\n\nFailed to reach stable state.\n\n")
         return
 
@@ -244,17 +189,17 @@ def main(args):
         experimental_disable_z_compression_and_tiling(xbox)
 
     # Create a new trace object
-    trace = Trace.Tracer(v_dma_get_addr, v_dma_put_addr_real, xbox, xbox_helper)
+    trace = Trace.Tracer(dma_pull_addr, dma_push_addr, xbox, xbox_helper, abort_flag)
 
     # Dump the initial state
     trace.command_count = -1
     trace.dump_surfaces(xbox, None)
     trace.command_count = 0
 
-    _run(xbox, xbox_helper, v_dma_get_addr, trace)
+    trace.run()
 
     # Recover the real address
-    xbox.write_u32(XboxHelper.DMA_PUSH_ADDR, trace.real_dma_put_addr)
+    xbox.write_u32(XboxHelper.DMA_PUSH_ADDR, trace.real_dma_push_addr)
 
     print("\n\nFinished PB\n\n")
 
