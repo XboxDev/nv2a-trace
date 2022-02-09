@@ -269,6 +269,16 @@ class XboxHelper:
             if offset == 0:
                 break
 
+    def print_enable_states(self):
+        """Prints out the states of PGRAPH and the PFIFO push/pull registers."""
+        print("Enable states:")
+        print(f"  PGRAPH: {self.is_pgraph_enabled()}")
+        print(f"  Push: {self.is_cache_push_master_enabled()}")
+        print(
+            f"  DMA_Push: {self.is_cache_push_dma_enabled()} (Busy: {self.is_cache_push_dma_busy()} Empty: {self.is_cache_push_dma_buffer_empty()})"
+        )
+        print(f"  DMA_Pull: {self.is_cache_pull_dma_enabled()}")
+
     # FIXME: This works poorly if the method count is not 0
     def print_pb_state(self):
         dma_pull_addr = self.xbox.read_u32(DMA_PULL_ADDR)
@@ -314,9 +324,20 @@ class XboxHelper:
                 print(output)
         print()
 
+    def print_dma_addresses(self):
+        push_addr = self.get_dma_push_address()
+        pull_addr = self.get_dma_pull_address()
+        print("DMA: PULL: 0x%X  PUSH: 0x%X" % (pull_addr, push_addr))
+
     def print_dma_state(self):
         state = self.parse_dma_state()
         print("dma_method: 0x%04X (count: %d)" % (state.method, state.method_count))
+
+    def is_cache_empty(self):
+        """Returns True if the CACHE is currently empty."""
+        pull_addr = self.xbox.read_u32(CACHE_PULL_ADDR)
+        push_addr = self.xbox.read_u32(CACHE_PUSH_ADDR)
+        return pull_addr == push_addr
 
     def fetch_ramht(self):
         ht = self.xbox.read_u32(RAM_HASHTABLE)
@@ -345,6 +366,24 @@ class XboxHelper:
             error=(dma_state >> 29) & 0x07,
         )
         return ret
+
+    def is_cache_push_master_enabled(self):
+        return bool(self.xbox.read_u32(CACHE_PUSH_MASTER_STATE) & 0x01)
+
+    def is_cache_push_dma_enabled(self):
+        return bool(self.xbox.read_u32(CACHE_PUSH_STATE) & 0x01)
+
+    def is_cache_push_dma_busy(self):
+        return bool(self.xbox.read_u32(CACHE_PUSH_STATE) & 0x10)
+
+    def is_cache_push_dma_buffer_empty(self):
+        return bool(self.xbox.read_u32(CACHE_PUSH_STATE) & 0x100)
+
+    def is_cache_pull_dma_enabled(self):
+        return bool(self.xbox.read_u32(CACHE_PULL_STATE) & 0x01)
+
+    def is_pgraph_enabled(self):
+        return bool(self.xbox.read_u32(PGRAPH_STATE) & 0x01)
 
     def get_dma_push_address(self):
         return self.xbox.read_u32(DMA_PUSH_ADDR)
