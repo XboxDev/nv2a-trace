@@ -138,6 +138,11 @@ class Tracer:
 
                 if is_empty:
                     print("Reached end of buffer with %d bytes queued?!" % bytes_queued)
+                    self.xbox_helper.print_enable_states()
+                    self.xbox_helper.print_pb_state()
+                    self.xbox_helper.print_dma_state()
+                    self.xbox_helper.print_cache_state()
+                    print("========")
                     # break
 
                 # Verify we are where we think we are

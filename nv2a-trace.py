@@ -32,6 +32,7 @@ def _wait_for_stable_push_buffer_state(
     dma_push_addr_real = 0
 
     while not abort_flag.should_abort:
+
         # Stop consuming CACHE entries.
         xbox_helper.disable_pgraph_fifo()
         xbox_helper.wait_until_pgraph_idle()
