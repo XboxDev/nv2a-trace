@@ -15,6 +15,11 @@ from Xbox import Xbox
 import XboxHelper
 from xboxpy import nv2a
 
+# Value that may be added to contiguous memory addresses to access as ADDR_AGPMEM, which
+# is guaranteed to be linear (and thus may be slower than tiled ADDR_FBMEM but can be
+# manipulated directly).
+AGP_MEMORY_BASE = 0xF0000000
+
 TextureParameters = namedtuple(
     "TextureParameters",
     [
@@ -74,6 +79,9 @@ def _decode_texture(
         raise Exception("Unsupported channel_sizes %d" % len(channel_sizes))
 
     img = Image.new(mode, (width, height))
+
+    # TODO: Is unswizzling actually necessary if textures are read via AGP?
+    # Need to set up a swizzled test case and verify behavior.
 
     # FIXME: Unswizzle data on the fly instead
     if swizzled:
@@ -251,13 +259,13 @@ def dump_texture(xbox, offset, pitch, fmt_color, width, height):
             "RGB", (width, height), (255, 0, 255, 255)
         )  # FIXME! Palette mode!
     elif fmt_color == 0xC:  # DXT1
-        data = xbox.read(0x80000000 | offset, width * height // 2)
+        data = xbox.read(AGP_MEMORY_BASE | offset, width * height // 2)
         img = Image.frombytes("RGBA", (width, height), data, "bcn", 1)  # DXT1
     elif fmt_color == 0xE:  # DXT3
-        data = xbox.read(0x80000000 | offset, width * height * 1)
+        data = xbox.read(AGP_MEMORY_BASE | offset, width * height * 1)
         img = Image.frombytes("RGBA", (width, height), data, "bcn", 2)  # DXT3
     elif fmt_color == 0xF:  # DXT5
-        data = xbox.read(0x80000000 | offset, width * height * 1)
+        data = xbox.read(AGP_MEMORY_BASE | offset, width * height * 1)
         img = Image.frombytes("RGBA", (width, height), data, "bcn", 3)  # DXT5
     elif fmt_color == 0x10:
         tex_info = (False, A1R5G5B5)
@@ -304,7 +312,7 @@ def dump_texture(xbox, offset, pitch, fmt_color, width, height):
             pitch = width * bits_per_pixel // 8
 
         # FIXME: Might want to skip the empty area if pitch and width diverge?
-        data = xbox.read(0x80000000 | offset, pitch * height)
+        data = xbox.read(AGP_MEMORY_BASE | offset, pitch * height)
         img = _decode_texture(
             data,
             (width, height),
