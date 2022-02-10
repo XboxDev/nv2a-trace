@@ -23,13 +23,18 @@ class NV2ALog:
     def log_method(self, method_info, data, pre_info, post_info):
         """Append a line describing the given pgraph call to the nv2a log."""
         with open(self.path, "a", encoding="utf8") as logfile:
+            if data is not None:
+                data_str = "0x%X" % data
+            else:
+                data_str = "<NO_DATA>"
+
             logfile.write(
-                "nv2a: pgraph method (%d): 0x%x -> 0x%x (0x%x)\n"
+                "nv2a: pgraph method (%d): 0x%x -> 0x%x (%s)\n"
                 % (
                     method_info["subchannel"],
                     method_info["object"],
                     method_info["method"],
-                    data,
+                    data_str,
                 )
             )
 
