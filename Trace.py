@@ -75,6 +75,10 @@ def _read_pgraph_rdi(xbox: Xbox, offset: int, count: int) -> bytes:
 class Tracer:
     """Performs tracing of the xbox nv2a state."""
 
+    ALPHA_MODE_BOTH = 0
+    ALPHA_MODE_KEEP = 1
+    ALPHA_MODE_DROP = 2
+
     def __init__(
         self,
         dma_pull_addr: int,
@@ -83,6 +87,7 @@ class Tracer:
         xbox_helper: XboxHelper.XboxHelper,
         abort_flag: AbortFlag,
         output_dir="out",
+        alpha_mode=ALPHA_MODE_DROP,
         enable_texture_dumping=True,
         enable_surface_dumping=True,
         enable_raw_pixel_dumping=True,
@@ -92,6 +97,7 @@ class Tracer:
         self.xbox = xbox
         self.xbox_helper = xbox_helper
         self.abort_flag = abort_flag
+        self.alpha_mode = alpha_mode
         self.output_dir = output_dir
         self.html_log = HTMLLog(os.path.join(output_dir, "debug.html"))
         self.nv2a_log = NV2ALog(os.path.join(output_dir, "nv2a_log.txt"))
@@ -425,10 +431,29 @@ class Tracer:
         )
 
         # FIXME: Respect anti-aliasing
+        img_tags = ""
+        if self.alpha_mode != self.ALPHA_MODE_KEEP:
+            no_alpha_path = "command%d--color.png" % (self.command_count)
+            img_tags += '<img height="128px" src="%s" alt="%s"/>' % (
+                no_alpha_path,
+                no_alpha_path,
+            )
+        else:
+            no_alpha_path = None
+
+        if self.alpha_mode != self.ALPHA_MODE_DROP:
+            alpha_path = "command%d--color-a.png" % (self.command_count)
+            img_tags += '<img height="128px" src="%s" alt="%s"/>' % (
+                alpha_path,
+                alpha_path,
+            )
+        else:
+            alpha_path = None
 
         path = "command%d--color.png" % (self.command_count)
         extra_html = []
-        extra_html += ['<img height="128px" src="%s" alt="%s"/>' % (path, path)]
+
+        extra_html += [img_tags]
         extra_html += [
             "%d x %d [pitch = %d (0x%X)], at 0x%08X, format 0x%X, type: 0x%X, swizzle: 0x%08X, 0x%08X [used %d]"
             % (
@@ -460,11 +485,11 @@ class Tracer:
             traceback.print_exc()
 
         if img:
-            # FIXME: Make this configurable or save an alpha preserving variant.
-            # Hack to remove alpha channel
-            img = img.convert("RGB")
-
-            img.save(os.path.join(self.output_dir, path))
+            if alpha_path:
+                img.save(os.path.join(self.output_dir, alpha_path))
+            if no_alpha_path:
+                img = img.convert("RGB")
+                img.save(os.path.join(self.output_dir, no_alpha_path))
 
         return extra_html
 

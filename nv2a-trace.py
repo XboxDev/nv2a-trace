@@ -184,6 +184,13 @@ def main(args):
     enable_surface_dumping = pixel_dumping and not args.no_surface
     enable_raw_pixel_dumping = pixel_dumping and not args.no_raw_pixel
 
+    if args.alpha_mode == "both":
+        alpha_mode = Trace.Tracer.ALPHA_MODE_BOTH
+    elif args.alpha_mode == "keep":
+        alpha_mode = Trace.Tracer.ALPHA_MODE_KEEP
+    else:
+        alpha_mode = Trace.Tracer.ALPHA_MODE_DROP
+
     trace = Trace.Tracer(
         dma_pull_addr,
         dma_push_addr,
@@ -191,6 +198,7 @@ def main(args):
         xbox_helper,
         abort_flag,
         output_dir=args.out,
+        alpha_mode=alpha_mode,
         enable_texture_dumping=enable_texture_dumping,
         enable_surface_dumping=enable_surface_dumping,
         enable_raw_pixel_dumping=enable_raw_pixel_dumping,
@@ -255,6 +263,18 @@ if __name__ == "__main__":
             "--no-raw-pixel",
             help="Disable raw memory dumping of all graphical resources (surfaces, textures).",
             action="store_true",
+        )
+
+        parser.add_argument(
+            "--alpha-mode",
+            default="drop",
+            choices=["drop", "keep", "both"],
+            help=(
+                "Define how the alpha channel is handled in color graphical resources.\n"
+                "  drop: Discard the alpha channel\n"
+                "  keep: Save the alpha channel\n"
+                "  drop: Save two dumps, one with the alpha channel and one without\n"
+            ),
         )
 
         parser.add_argument(
