@@ -34,10 +34,29 @@ EOF
   # the staged ones. Depending on typical workflows it might be better to do
   # something more complicated here, or to just have the hook fail instead of
   # perform an in-place fix.
-  files_to_format="$(echo "${changed_python_filenames}" | grep -v '3rdparty')"
+  local files_to_format="$(echo "${changed_python_filenames}" | grep -v '3rdparty')"
   if [[ -n "${files_to_format}" ]]; then
     echo "${files_to_format}" | xargs black
     echo "${files_to_format}" | xargs git add
+  fi
+}
+
+function check_no_donotsubmit {
+  local filenames="$1"
+
+  if [[ -z "${filenames}" ]]; then
+    return
+  fi
+
+  set +e
+  output="$(grep -H -ni 'DONOTSUBMIT' -- "$1" 2>/dev/null)"
+  found=$?
+  set -e
+
+  if [[ $found -eq 0 ]]; then
+    echo "${output}"
+    echo "DONOTSUBMIT tag found, aborting"
+    exit 1
   fi
 }
 
@@ -62,4 +81,6 @@ changed_python_filenames="$(echo "${added_and_modified_filenames}" | \
 git config --local core.whitespace -blank-at-eof
 
 run_black
+check_no_donotsubmit "${changed_python_filenames}"
 check_no_diffmarkers_or_whitespace_errors "${against}"
+
