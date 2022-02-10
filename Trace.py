@@ -7,6 +7,7 @@
 # pylint: disable=too-many-instance-attributes
 # pylint: disable=too-many-locals
 # pylint: disable=too-many-statements
+# pylint: disable=too-many-function-args
 
 from collections import defaultdict
 import os
@@ -26,16 +27,6 @@ import XboxHelper
 
 class MaxFlipExceeded(Exception):
     """Exception to indicate the maximum number of buffer flips has been reached."""
-
-
-# pylint: disable=invalid-name
-OutputDir = "out"
-PixelDumping = True
-TextureDumping = True
-SurfaceDumping = True
-DebugPrint = False
-MaxFrames = 0
-# pylint: enable=invalid-name
 
 
 def _dump_pgraph(xbox):
@@ -91,18 +82,30 @@ class Tracer:
         xbox: Xbox,
         xbox_helper: XboxHelper.XboxHelper,
         abort_flag: AbortFlag,
+        output_dir="out",
+        enable_texture_dumping=True,
+        enable_surface_dumping=True,
+        enable_raw_pixel_dumping=True,
+        verbose=False,
+        max_frames=0,
     ):
         self.xbox = xbox
         self.xbox_helper = xbox_helper
         self.abort_flag = abort_flag
-        self.html_log = HTMLLog(os.path.join(OutputDir, "debug.html"))
-        self.nv2a_log = NV2ALog(os.path.join(OutputDir, "nv2a_log.txt"))
+        self.output_dir = output_dir
+        self.html_log = HTMLLog(os.path.join(output_dir, "debug.html"))
+        self.nv2a_log = NV2ALog(os.path.join(output_dir, "nv2a_log.txt"))
         self.flip_stall_count = 0
         self.command_count = 0
 
         self.real_dma_pull_addr = dma_pull_addr
         self.real_dma_push_addr = dma_push_addr
         self.target_dma_push_addr = dma_pull_addr
+        self.enable_texture_dumping = enable_texture_dumping
+        self.enable_surface_dumping = enable_surface_dumping
+        self.enable_raw_pixel_dumping = enable_raw_pixel_dumping
+        self.verbose = verbose
+        self.max_frames = max_frames
 
         self.pgraph_dump = None
 
@@ -204,6 +207,11 @@ class Tracer:
             self.real_dma_push_addr = real
             # traceback.print_stack()
 
+    def _dbg_print(self, message):
+        if not self.verbose:
+            return
+        print(message)
+
     def run_fifo(self, pull_addr_target):
         """Runs the PFIFO until the DMA_PULL_ADDR equals the given address."""
 
@@ -241,23 +249,22 @@ class Tracer:
                     )
                 )
 
-            if DebugPrint:
-                print(
-                    "At 0x%08X, target is 0x%08X (Real: 0x%08X)"
-                    % (
-                        self.real_dma_pull_addr,
-                        pull_addr_target,
-                        self.real_dma_push_addr,
-                    )
+            self._dbg_print(
+                "At 0x%08X, target is 0x%08X (Real: 0x%08X)"
+                % (
+                    self.real_dma_pull_addr,
+                    pull_addr_target,
+                    self.real_dma_push_addr,
                 )
+            )
 
-                print(
-                    "> PULL ADDR: 0x%X  PUSH: 0x%X"
-                    % (
-                        self.xbox_helper.get_dma_pull_address(),
-                        self.xbox_helper.get_dma_push_address(),
-                    )
+            self._dbg_print(
+                "> PULL ADDR: 0x%X  PUSH: 0x%X"
+                % (
+                    self.xbox_helper.get_dma_pull_address(),
+                    self.xbox_helper.get_dma_push_address(),
                 )
+            )
 
             # Disable PGRAPH, so it can't run anything from CACHE.
             self.xbox_helper.disable_pgraph_fifo()
@@ -275,7 +282,7 @@ class Tracer:
             if not kicked:
                 print("Warning: FIFO kick failed")
 
-            if DebugPrint:
+            if self.verbose:
                 self.xbox_helper.print_cache_state()
 
             # Run the commands we have moved to CACHE, by enabling PGRAPH.
@@ -294,7 +301,7 @@ class Tracer:
         self._exchange_dma_push_address(pull_addr_target)
 
     def dump_textures(self, _data, *_args):
-        if not PixelDumping or not TextureDumping:
+        if self.enable_texture_dumping:
             return []
 
         extra_html = []
@@ -313,7 +320,7 @@ class Tracer:
 
             # FIXME: self.out("tex-%d.bin" % (i), xbox.read(0x80000000 | offset, pitch * height))
 
-            print(
+            self._dbg_print(
                 "Texture %d [0x%08X, %d x %d (pitch: 0x%X), format 0x%X]"
                 % (i, offset, width, height, pitch, fmt_color)
             )
@@ -322,13 +329,13 @@ class Tracer:
             )
 
             if img:
-                img.save(os.path.join(OutputDir, path))
+                img.save(os.path.join(self.output_dir, path))
             extra_html += ['<img height="128px" src="%s" alt="%s"/>' % (path, path)]
 
         return extra_html
 
     def dump_surfaces(self, _data, *_args):
-        if not PixelDumping or not SurfaceDumping:
+        if not self.enable_surface_dumping:
             return []
 
         color_pitch = self.xbox.read_u32(0xFD400858)
@@ -394,12 +401,12 @@ class Tracer:
         # Dump stuff we might care about
         self._write("pgraph.bin", _dump_pgraph(self.xbox))
         self._write("pfb.bin", _dump_pfb(self.xbox))
-        if color_offset != 0x00000000:
+        if color_offset and self.enable_raw_pixel_dumping:
             self._write(
                 "mem-2.bin",
                 self.xbox.read(0x80000000 | color_offset, color_pitch * height),
             )
-        if depth_offset != 0x00000000:
+        if depth_offset and self.enable_raw_pixel_dumping:
             self._write(
                 "mem-3.bin",
                 self.xbox.read(0x80000000 | depth_offset, depth_pitch * height),
@@ -440,11 +447,10 @@ class Tracer:
         print(extra_html[-1])
 
         try:
-            if color_offset == 0x00000000:
-                print("Color offset is null")
-                raise Exception()
+            if not color_offset:
+                raise Exception("Color offset is null")
 
-            print("Attempting to dump surface; swizzle: %s" % (str(swizzled)))
+            self._dbg_print("Attempting to dump surface; swizzle: %s" % (str(swizzled)))
             img = Texture.dump_texture(
                 self.xbox, color_offset, color_pitch, fmt_color, width, height
             )
@@ -458,7 +464,7 @@ class Tracer:
             # Hack to remove alpha channel
             img = img.convert("RGB")
 
-            img.save(os.path.join(OutputDir, path))
+            img.save(os.path.join(self.output_dir, path))
 
         return extra_html
 
@@ -638,7 +644,7 @@ class Tracer:
 
         self.nv2a_log.log("Flip (stall) %d\n\n" % self.flip_stall_count)
 
-        if MaxFrames and self.flip_stall_count >= MaxFrames:
+        if self.max_frames and self.flip_stall_count >= self.max_frames:
             raise MaxFlipExceeded()
         return []
 
@@ -679,7 +685,7 @@ class Tracer:
         self.html_log.log(["", "", "", "@0x%08X: DATA: 0x%08X" % (pull_addr, word)])
 
         # FIXME: Get where this command ends
-        next_parser_addr, info = XboxHelper.parse_command(pull_addr, word, DebugPrint)
+        next_parser_addr, info = XboxHelper.parse_command(pull_addr, word, self.verbose)
 
         # If we don't know where this command ends, we have to abort.
         if not next_parser_addr:
@@ -832,6 +838,9 @@ class Tracer:
         return pull_addr, unprocessed_bytes
 
     def _write(self, suffix, contents):
-        out_path = os.path.join(OutputDir, "command%d_" % self.command_count) + suffix
+        """Writes a raw byte dump."""
+        out_path = (
+            os.path.join(self.output_dir, "command%d_" % self.command_count) + suffix
+        )
         with open(out_path, "wb") as dumpfile:
             dumpfile.write(contents)
