@@ -19,7 +19,8 @@ import XboxHelper
 import Trace
 
 # pylint: disable=invalid-name
-_enable_experimental_disable_z_compression_and_tiling = True
+# TODO: Remove tiling suppression once AGP read in Texture.py is fully proven.
+_enable_experimental_disable_z_compression_and_tiling = False
 # pylint: enable=invalid-name
 
 
