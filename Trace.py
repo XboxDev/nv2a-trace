@@ -398,78 +398,28 @@ class Tracer:
         if not self.enable_surface_dumping:
             return []
 
-        color_pitch = self.xbox.read_u32(0xFD400858)
-        depth_pitch = self.xbox.read_u32(0xFD40085C)
+        params = Texture.read_texture_parameters(self.xbox)
 
-        color_offset = self.xbox.read_u32(0xFD400828)
-        depth_offset = self.xbox.read_u32(0xFD40082C)
-
-        color_base = self.xbox.read_u32(0xFD400840)
-        depth_base = self.xbox.read_u32(0xFD400844)
-
-        # FIXME: Is this correct? pbkit uses _base, but D3D seems to use _offset?
-        color_offset += color_base
-        depth_offset += depth_base
-
-        surface_clip_x = self.xbox.read_u32(0xFD4019B4)
-        surface_clip_y = self.xbox.read_u32(0xFD4019B8)
-
-        draw_format = self.xbox.read_u32(0xFD400804)
-        surface_type = self.xbox.read_u32(0xFD400710)
-        swizzle_unk = self.xbox.read_u32(0xFD400818)
-
-        swizzle_unk2 = self.xbox.read_u32(0xFD40086C)
-
-        clip_x = (surface_clip_x >> 0) & 0xFFFF
-        clip_y = (surface_clip_y >> 0) & 0xFFFF
-
-        clip_w = (surface_clip_x >> 16) & 0xFFFF
-        clip_h = (surface_clip_y >> 16) & 0xFFFF
-
-        surface_anti_aliasing = (surface_type >> 4) & 3
-
-        clip_x, clip_y = XboxHelper.apply_anti_aliasing_factor(
-            surface_anti_aliasing, clip_x, clip_y
-        )
-        clip_w, clip_h = XboxHelper.apply_anti_aliasing_factor(
-            surface_anti_aliasing, clip_w, clip_h
-        )
-
-        width = clip_x + clip_w
-        height = clip_y + clip_h
-
-        # FIXME: 128 x 128 [pitch = 256 (0x100)], at 0x01AA8000 [PGRAPH: 0x01AA8000?], format 0x5, type: 0x21000002, swizzle: 0x7070000 [used 0]
-
-        # FIXME: This does not seem to be a good field for this
-        # FIXME: Patched to give 50% of coolness
-        swizzled = (surface_type & 3) == 2
-        # FIXME: if surface_type is 0, we probably can't even draw..
-
-        format_color = (draw_format >> 12) & 0xF
-        # FIXME: Support 3D surfaces.
-        _format_depth = (draw_format >> 18) & 0x3
-
-        if not format_color:
+        if not params.format_color:
             print("Warning: Invalid color format, skipping surface dump.")
             return []
-
-        fmt_color = Texture.surface_color_format_to_texture_format(
-            format_color, swizzled
-        )
-        # fmt_depth = Texture.surface_zeta_format_to_texture_format(format_depth)
 
         # Dump stuff we might care about
         self._write("pgraph.bin", _dump_pgraph(self.xbox))
         self._write("pfb.bin", _dump_pfb(self.xbox))
-        if color_offset and self.enable_raw_pixel_dumping:
+        if params.color_offset and self.enable_raw_pixel_dumping:
             self._write(
                 "mem-2.bin",
-                self.xbox.read(0x80000000 | color_offset, color_pitch * height),
+                self.xbox.read(
+                    0x80000000 | params.color_offset, params.color_pitch * params.height
+                ),
             )
-        if depth_offset and self.enable_raw_pixel_dumping:
+        if params.depth_offset and self.enable_raw_pixel_dumping:
             self._write(
                 "mem-3.bin",
-                self.xbox.read(0x80000000 | depth_offset, depth_pitch * height),
+                self.xbox.read(
+                    0x80000000 | params.depth_offset, params.depth_pitch * params.height
+                ),
             )
         self._write(
             "pgraph-rdi-vp-instructions.bin",
@@ -511,27 +461,32 @@ class Tracer:
         extra_html += [
             "%d x %d [pitch = %d (0x%X)], at 0x%08X, format 0x%X, type: 0x%X, swizzle: 0x%08X, 0x%08X [used %d]"
             % (
-                width,
-                height,
-                color_pitch,
-                color_pitch,
-                color_offset,
-                format_color,
-                surface_type,
-                swizzle_unk,
-                swizzle_unk2,
-                swizzled,
+                params.width,
+                params.height,
+                params.color_pitch,
+                params.color_pitch,
+                params.color_offset,
+                params.format_color,
+                params.surface_type,
+                params.swizzle_unk,
+                params.swizzle_unk2,
+                params.swizzled,
             )
         ]
         self._dbg_print(extra_html[-1])
 
         try:
-            if not color_offset:
+            if not params.color_offset:
                 raise Exception("Color offset is null")
 
-            self._dbg_print("Attempting to dump surface; swizzle: %s" % (str(swizzled)))
+            self._dbg_print("Attempting to dump surface; swizzle: %s" % (str(params.swizzled)))
             img = Texture.dump_texture(
-                self.xbox, color_offset, color_pitch, fmt_color, width, height
+                self.xbox,
+                params.color_offset,
+                params.color_pitch,
+                params.format_color,
+                params.width,
+                params.height,
             )
         except:  # pylint: disable=bare-except
             img = None
