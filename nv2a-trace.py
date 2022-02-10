@@ -25,7 +25,7 @@ _enable_experimental_disable_z_compression_and_tiling = False
 
 
 def _wait_for_stable_push_buffer_state(
-    xbox_helper: XboxHelper.XboxHelper, abort_flag: AbortFlag
+    xbox_helper: XboxHelper.XboxHelper, abort_flag: AbortFlag, verbose: bool = False
 ):
     """Blocks until the push buffer reaches a stable state."""
 
@@ -57,6 +57,12 @@ def _wait_for_stable_push_buffer_state(
         dma_push_addr_target = dma_pull_addr
         xbox_helper.set_dma_push_address(dma_push_addr_target)
 
+        if verbose:
+            print("=== PRE RESUME ======")
+            print("Real push addr: 0x%X" % dma_push_addr_real)
+            xbox_helper.print_dma_addresses()
+            xbox_helper.print_cache_state()
+
         # Resume pusher - The PB can't run yet, as it has no commands to process.
         xbox_helper.resume_fifo_pusher()
 
@@ -66,7 +72,12 @@ def _wait_for_stable_push_buffer_state(
         # So we pause the pusher again to validate our state
         xbox_helper.pause_fifo_pusher()
 
-        time.sleep(1.0)
+        time.sleep(0.1)
+
+        if verbose:
+            print("   POST RESUME")
+            xbox_helper.print_dma_addresses()
+            xbox_helper.print_cache_state()
 
         dma_push_addr_check = xbox_helper.get_dma_push_address()
         dma_pull_addr_check = xbox_helper.get_dma_pull_address()
@@ -162,7 +173,7 @@ def main(args):
 
     print("\n\nAwaiting stable PB state\n\n")
     dma_pull_addr, dma_push_addr = _wait_for_stable_push_buffer_state(
-        xbox_helper, abort_flag
+        xbox_helper, abort_flag, args.verbose
     )
 
     if not dma_pull_addr or not dma_push_addr or abort_flag.should_abort:
