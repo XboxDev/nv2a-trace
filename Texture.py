@@ -11,7 +11,27 @@
 from collections import namedtuple
 from PIL import Image
 
+from Xbox import Xbox
+import XboxHelper
 from xboxpy import nv2a
+
+TextureParameters = namedtuple(
+    "TextureParameters",
+    [
+        "width",
+        "height",
+        "color_pitch",
+        "color_offset",
+        "format_color",
+        "depth_pitch",
+        "depth_offset",
+        "format_depth",
+        "surface_type",
+        "swizzle_unk",
+        "swizzle_unk2",
+        "swizzled",
+    ],
+)
 
 # Right hand side is always in RGB or RGBA channel order.
 TextureDescription = namedtuple(
@@ -127,6 +147,82 @@ def surface_zeta_format_to_texture_format(fmt, swizzled, is_float):
             "float" if is_float else "fixed",
             "swizzled" if swizzled else "unswizzled",
         )
+    )
+
+
+def read_texture_parameters(xbox: Xbox) -> TextureParameters:
+    """Reads the current texture state"""
+    color_pitch = xbox.read_u32(0xFD400858)
+    depth_pitch = xbox.read_u32(0xFD40085C)
+
+    color_offset = xbox.read_u32(0xFD400828)
+    depth_offset = xbox.read_u32(0xFD40082C)
+
+    color_base = xbox.read_u32(0xFD400840)
+    depth_base = xbox.read_u32(0xFD400844)
+
+    # FIXME: Is this correct? pbkit uses _base, but D3D seems to use _offset?
+    color_offset += color_base
+    depth_offset += depth_base
+
+    surface_clip_x = xbox.read_u32(0xFD4019B4)
+    surface_clip_y = xbox.read_u32(0xFD4019B8)
+
+    draw_format = xbox.read_u32(0xFD400804)
+    surface_type = xbox.read_u32(0xFD400710)
+    swizzle_unk = xbox.read_u32(0xFD400818)
+
+    swizzle_unk2 = xbox.read_u32(0xFD40086C)
+
+    clip_x = (surface_clip_x >> 0) & 0xFFFF
+    clip_y = (surface_clip_y >> 0) & 0xFFFF
+
+    clip_w = (surface_clip_x >> 16) & 0xFFFF
+    clip_h = (surface_clip_y >> 16) & 0xFFFF
+
+    surface_anti_aliasing = (surface_type >> 4) & 3
+
+    clip_x, clip_y = XboxHelper.apply_anti_aliasing_factor(
+        surface_anti_aliasing, clip_x, clip_y
+    )
+    clip_w, clip_h = XboxHelper.apply_anti_aliasing_factor(
+        surface_anti_aliasing, clip_w, clip_h
+    )
+
+    width = clip_x + clip_w
+    height = clip_y + clip_h
+
+    # FIXME: 128 x 128 [pitch = 256 (0x100)], at 0x01AA8000 [PGRAPH: 0x01AA8000?], format 0x5, type: 0x21000002, swizzle: 0x7070000 [used 0]
+
+    # FIXME: This does not seem to be a good field for this
+    # FIXME: Patched to give 50% of coolness
+    swizzled = (surface_type & 3) == 2
+    # FIXME: if surface_type is 0, we probably can't even draw..
+
+    format_color = (draw_format >> 12) & 0xF
+    # FIXME: Support 3D surfaces.
+    _format_depth_buffer = (draw_format >> 18) & 0x3
+
+    if not format_color:
+        fmt_color = None
+    else:
+        fmt_color = surface_color_format_to_texture_format(format_color, swizzled)
+    # TODO: Extract swizzle and float state.
+    # fmt_depth = surface_zeta_format_to_texture_format(format_depth_buffer)
+
+    return TextureParameters(
+        width=width,
+        height=height,
+        color_pitch=color_pitch,
+        color_offset=color_offset,
+        format_color=fmt_color,
+        depth_pitch=depth_pitch,
+        depth_offset=depth_offset,
+        format_depth=None,
+        surface_type=surface_type,
+        swizzle_unk=swizzle_unk,
+        swizzle_unk2=swizzle_unk2,
+        swizzled=swizzled,
     )
 
 
