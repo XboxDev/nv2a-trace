@@ -64,20 +64,19 @@ def _dump_pfb(xbox):
     return bytes(buffer)
 
 
-def _read_pgraph_rdi(xbox, offset, count):
+def _read_pgraph_rdi(xbox: Xbox, offset: int, count: int) -> bytes:
     # FIXME: Assert pusher access is disabled
     # FIXME: Assert PGRAPH idle
 
     NV10_PGRAPH_RDI_INDEX = 0xFD400750
     NV10_PGRAPH_RDI_DATA = 0xFD400754
 
-    xbox.write_u32(NV10_PGRAPH_RDI_INDEX, offset)
-    data = bytearray()
-    for _ in range(count):
-        word = xbox.read_u32(NV10_PGRAPH_RDI_DATA)
-        data += struct.pack("<L", word)
+    original_offset = ExchangeU32.exchange_u32(xbox, NV10_PGRAPH_RDI_INDEX, offset)
 
-    # FIXME: Restore original RDI?
+    data = xbox.read(NV10_PGRAPH_RDI_DATA, count * 4)
+
+    xbox.write_u32(NV10_PGRAPH_RDI_INDEX, original_offset)
+
     # FIXME: Assert the conditions from entry have not changed
     return data
 
