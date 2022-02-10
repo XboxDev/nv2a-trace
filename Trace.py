@@ -306,37 +306,91 @@ class Tracer:
         # This is just to confirm that nothing was modified in the final chunk
         self._exchange_dma_push_address(pull_addr_target)
 
-    def dump_textures(self, _data, *_args):
-        if self.enable_texture_dumping:
+    def _dump_texture(self, index):
+        reg_offset = index * 4
+        # Verify that the texture stage is enabled
+        control = self.xbox.read_u32(XboxHelper.PGRAPH_TEXCTL0_0 + reg_offset)
+        if not control & (1 << 30):
+            return ""
+
+        offset = self.xbox.read_u32(XboxHelper.PGRAPH_TEXOFFSET0 + reg_offset)
+        pitch = self.xbox.read_u32(XboxHelper.PGRAPH_TEXCTL1_0 + reg_offset) >> 16
+        fmt = self.xbox.read_u32(XboxHelper.PGRAPH_TEXFMT0 + reg_offset)
+
+        fmt_color = (fmt >> 8) & 0x7F
+        width_shift = (fmt >> 20) & 0xF
+        height_shift = (fmt >> 24) & 0xF
+        depth_shift = (fmt >> 28) & 0xF
+        width = 1 << width_shift
+        height = 1 << height_shift
+        depth = 1 << depth_shift
+
+        self._dbg_print(
+            "Texture %d [0x%08X, %d x %d x %d (pitch: 0x%X), format 0x%X]"
+            % (index, offset, width, height, depth, pitch, fmt_color)
+        )
+
+        def dump(img_tags, adjusted_offset, layer):
+            if layer >= 0:
+                layer_name = "_L%d" % layer
+            else:
+                layer_name = ""
+
+            if self.alpha_mode != self.ALPHA_MODE_KEEP:
+                no_alpha_path = "command%d--tex_%d%scolor.png" % (
+                    self.command_count,
+                    index,
+                    layer_name,
+                )
+                img_tags += '<img height="128px" src="%s" alt="%s"/>' % (
+                    no_alpha_path,
+                    no_alpha_path,
+                )
+            else:
+                no_alpha_path = None
+
+            if self.alpha_mode != self.ALPHA_MODE_DROP:
+                alpha_path = "command%d--tex_%d%scolor-a.png" % (
+                    self.command_count,
+                    index,
+                    layer_name,
+                )
+                img_tags += '<img height="128px" src="%s" alt="%s"/>' % (
+                    alpha_path,
+                    alpha_path,
+                )
+            else:
+                alpha_path = None
+
+            img = Texture.dump_texture(
+                self.xbox, adjusted_offset, pitch, fmt_color, width, height
+            )
+
+            self._save_image(img, no_alpha_path, alpha_path)
+
+            return img_tags
+
+        img_tags = ""
+        if depth == 1:
+            img_tags = dump(img_tags, offset, -1)
+        else:
+            adjusted_offset = offset
+            for layer in range(depth):
+                img_tags += dump(img_tags, adjusted_offset, layer)
+                adjusted_offset += pitch * height
+
+        return img_tags
+
+    def dump_textures(self, data, *args):
+        if not self.enable_texture_dumping:
             return []
 
         extra_html = []
 
         for i in range(4):
-            path = "command%d--tex_%d.png" % (self.command_count, i)
-
-            offset = self.xbox.read_u32(0xFD401A24 + i * 4)  # NV_PGRAPH_TEXOFFSET0
-            pitch = 0  # self.xbox.read_u32(0xFD4019DC + i * 4) # NV_PGRAPH_TEXCTL1_0_IMAGE_PITCH
-            fmt = self.xbox.read_u32(0xFD401A04 + i * 4)  # NV_PGRAPH_TEXFMT0
-            fmt_color = (fmt >> 8) & 0x7F
-            width_shift = (fmt >> 20) & 0xF
-            height_shift = (fmt >> 24) & 0xF
-            width = 1 << width_shift
-            height = 1 << height_shift
-
-            # FIXME: self.out("tex-%d.bin" % (i), xbox.read(0x80000000 | offset, pitch * height))
-
-            self._dbg_print(
-                "Texture %d [0x%08X, %d x %d (pitch: 0x%X), format 0x%X]"
-                % (i, offset, width, height, pitch, fmt_color)
-            )
-            img = Texture.dump_texture(
-                self.xbox, offset, pitch, fmt_color, width, height
-            )
-
-            if img:
-                img.save(os.path.join(self.output_dir, path))
-            extra_html += ['<img height="128px" src="%s" alt="%s"/>' % (path, path)]
+            tags = self._dump_texture(i)
+            if tags:
+                extra_html += [tags]
 
         return extra_html
 
@@ -469,7 +523,7 @@ class Tracer:
                 swizzled,
             )
         ]
-        print(extra_html[-1])
+        self._dbg_print(extra_html[-1])
 
         try:
             if not color_offset:
@@ -484,14 +538,20 @@ class Tracer:
             print("Failed to dump color surface")
             traceback.print_exc()
 
-        if img:
-            if alpha_path:
-                img.save(os.path.join(self.output_dir, alpha_path))
-            if no_alpha_path:
-                img = img.convert("RGB")
-                img.save(os.path.join(self.output_dir, no_alpha_path))
+        self._save_image(img, no_alpha_path, alpha_path)
 
         return extra_html
+
+    def _save_image(self, img, no_alpha_path, alpha_path):
+        """Saves a PIL.Image to the given path(s)"""
+        if not img:
+            return
+
+        if alpha_path:
+            img.save(os.path.join(self.output_dir, alpha_path))
+        if no_alpha_path:
+            img = img.convert("RGB")
+            img.save(os.path.join(self.output_dir, no_alpha_path))
 
     def _hook_methods(self):
         """Installs hooks for methods interpreted by this class."""
@@ -516,17 +576,16 @@ class Tracer:
             0x97, NV097_BACK_END_WRITE_SEMAPHORE_RELEASE, [], [self.dump_surfaces]
         )
 
-    def _handle_begin(self, data, *_args):
+    def _handle_begin(self, data, *args):
 
         # Avoid handling End
-        if data == 0:
+        if not data:
             return []
 
         print("BEGIN %d" % self.command_count)
 
         extra_html = []
-        # extra_html += self.DumpSurfaces(xbox, data, *args)
-        # extra_html += self.DumpTextures(xbox, data, *args)
+        extra_html += self.dump_textures(data, *args)
         return extra_html
 
     def _handle_end(self, data, *args):
