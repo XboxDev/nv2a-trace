@@ -144,17 +144,6 @@ def main(args):
 
     os.makedirs(args.out, exist_ok=True)
 
-    if args.no_surface:
-        Trace.SurfaceDumping = False
-
-    if args.no_texture:
-        Trace.TextureDumping = False
-
-    if args.no_pixel:
-        Trace.PixelDumping = False
-
-    Trace.MaxFrames = args.max_flip
-
     xbox = Xbox()
     xbox_helper = XboxHelper.XboxHelper(xbox)
 
@@ -190,7 +179,24 @@ def main(args):
         experimental_disable_z_compression_and_tiling(xbox)
 
     # Create a new trace object
-    trace = Trace.Tracer(dma_pull_addr, dma_push_addr, xbox, xbox_helper, abort_flag)
+    pixel_dumping = not args.no_pixel
+    enable_texture_dumping = pixel_dumping and not args.no_texture
+    enable_surface_dumping = pixel_dumping and not args.no_surface
+    enable_raw_pixel_dumping = pixel_dumping and not args.no_raw_pixel
+
+    trace = Trace.Tracer(
+        dma_pull_addr,
+        dma_push_addr,
+        xbox,
+        xbox_helper,
+        abort_flag,
+        output_dir=args.out,
+        enable_texture_dumping=enable_texture_dumping,
+        enable_surface_dumping=enable_surface_dumping,
+        enable_raw_pixel_dumping=enable_raw_pixel_dumping,
+        verbose=args.verbose,
+        max_frames=args.max_flip,
+    )
 
     # Dump the initial state
     trace.command_count = -1
@@ -242,6 +248,19 @@ if __name__ == "__main__":
         parser.add_argument(
             "--no-pixel",
             help="Disable dumping of all graphical resources (surfaces, textures).",
+            action="store_true",
+        )
+
+        parser.add_argument(
+            "--no-raw-pixel",
+            help="Disable raw memory dumping of all graphical resources (surfaces, textures).",
+            action="store_true",
+        )
+
+        parser.add_argument(
+            "-v",
+            "--verbose",
+            help="Enable verbose debug output.",
             action="store_true",
         )
 
