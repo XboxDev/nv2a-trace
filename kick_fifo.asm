@@ -11,7 +11,6 @@ kick_fifo:
 
 push ebp
 mov ebp, esp
-sub esp, 4
 push ebx
 
 ; Load `expected_push` into EDX
