@@ -314,7 +314,16 @@ class Tracer:
             return ""
 
         offset = self.xbox.read_u32(XboxHelper.PGRAPH_TEXOFFSET0 + reg_offset)
-        pitch = self.xbox.read_u32(XboxHelper.PGRAPH_TEXCTL1_0 + reg_offset) >> 16
+        # FIXME: read pitch from registers instead of guessing
+        # FIXME: clean up associated fallback code in Texture.py
+        # There is a case in Morrowind where pitch is set to 0x8 which is clearly wrong
+        #   Texture 0 [0x03CC6000, 128 x 128 x 1 (pitch: 0x8), format 0xC]
+        #   Texture 1 [0x03C98000, 64 x 64 x 1 (pitch: 0x8), format 0x6]
+        # Double check the register for correctness and see if swizzling has something
+        # to do with it (e.g., like how NV097_SET_TEXTURE_IMAGE_RECT is only needed by
+        # linear formats).
+        reg_pitch = self.xbox.read_u32(XboxHelper.PGRAPH_TEXCTL1_0 + reg_offset) >> 16
+        pitch = 0
         fmt = self.xbox.read_u32(XboxHelper.PGRAPH_TEXFMT0 + reg_offset)
 
         fmt_color = (fmt >> 8) & 0x7F
@@ -326,8 +335,8 @@ class Tracer:
         depth = 1 << depth_shift
 
         self._dbg_print(
-            "Texture %d [0x%08X, %d x %d x %d (pitch: 0x%X), format 0x%X]"
-            % (index, offset, width, height, depth, pitch, fmt_color)
+            "Texture %d [0x%08X, %d x %d x %d (pitch: 0x%X <ignored>), format 0x%X]"
+            % (index, offset, width, height, depth, reg_pitch, fmt_color)
         )
 
         def dump(img_tags, adjusted_offset, layer):
@@ -479,7 +488,9 @@ class Tracer:
             if not params.color_offset:
                 raise Exception("Color offset is null")
 
-            self._dbg_print("Attempting to dump surface; swizzle: %s" % (str(params.swizzled)))
+            self._dbg_print(
+                "Attempting to dump surface; swizzle: %s" % (str(params.swizzled))
+            )
             img = Texture.dump_texture(
                 self.xbox,
                 params.color_offset,
