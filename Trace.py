@@ -55,18 +55,28 @@ def _dump_pfb(xbox):
     return bytes(buffer)
 
 
-def _read_pgraph_rdi(xbox: Xbox, offset: int, count: int) -> bytes:
+def _read_pgraph_rdi(xbox: Xbox, offset: int, count: int):
     # FIXME: Assert pusher access is disabled
     # FIXME: Assert PGRAPH idle
 
     NV10_PGRAPH_RDI_INDEX = 0xFD400750
     NV10_PGRAPH_RDI_DATA = 0xFD400754
 
-    original_offset = ExchangeU32.exchange_u32(xbox, NV10_PGRAPH_RDI_INDEX, offset)
+    # JFR: Reading the DATA register 4 times returns X,Y,Z,W (not in that order as far
+    # as I remember), but during that time the INDEX register will stay constant, only
+    # on the final read I think it auto-increments the INDEX.
+    # It is not safe and likely incorrect to do a bulk read so this must be done
+    # individualy despite the interface communication overhead.
+    xbox.write_u32(NV10_PGRAPH_RDI_INDEX, offset)
+    data = bytearray()
+    for _ in range(count):
+        word = xbox.read_u32(NV10_PGRAPH_RDI_DATA)
+        data += struct.pack("<L", word)
 
-    data = xbox.read(NV10_PGRAPH_RDI_DATA, count * 4)
-
-    xbox.write_u32(NV10_PGRAPH_RDI_INDEX, original_offset)
+    # FIXME: Restore original RDI?
+    # Context from JFR: It may not be possible to restore the original index.
+    # If you touch the INDEX register, you may or may not be resetting the internal state
+    # machine.
 
     # FIXME: Assert the conditions from entry have not changed
     return data
@@ -91,6 +101,7 @@ class Tracer:
         enable_texture_dumping=True,
         enable_surface_dumping=True,
         enable_raw_pixel_dumping=True,
+        enable_rdi=True,
         verbose=False,
         max_frames=0,
     ):
@@ -110,6 +121,7 @@ class Tracer:
         self.enable_texture_dumping = enable_texture_dumping
         self.enable_surface_dumping = enable_surface_dumping
         self.enable_raw_pixel_dumping = enable_raw_pixel_dumping
+        self.enable_rdi = enable_rdi
         self.verbose = verbose
         self.max_frames = max_frames
 
@@ -314,14 +326,8 @@ class Tracer:
             return ""
 
         offset = self.xbox.read_u32(XboxHelper.PGRAPH_TEXOFFSET0 + reg_offset)
-        # FIXME: read pitch from registers instead of guessing
+        # FIXME: Use pitch from registers for linear formats.
         # FIXME: clean up associated fallback code in Texture.py
-        # There is a case in Morrowind where pitch is set to 0x8 which is clearly wrong
-        #   Texture 0 [0x03CC6000, 128 x 128 x 1 (pitch: 0x8), format 0xC]
-        #   Texture 1 [0x03C98000, 64 x 64 x 1 (pitch: 0x8), format 0x6]
-        # Double check the register for correctness and see if swizzling has something
-        # to do with it (e.g., like how NV097_SET_TEXTURE_IMAGE_RECT is only needed by
-        # linear formats).
         reg_pitch = self.xbox.read_u32(XboxHelper.PGRAPH_TEXCTL1_0 + reg_offset) >> 16
         pitch = 0
         fmt = self.xbox.read_u32(XboxHelper.PGRAPH_TEXFMT0 + reg_offset)
@@ -335,7 +341,7 @@ class Tracer:
         depth = 1 << depth_shift
 
         self._dbg_print(
-            "Texture %d [0x%08X, %d x %d x %d (pitch: 0x%X <ignored>), format 0x%X]"
+            "Texture %d [0x%08X, %d x %d x %d (pitch register: 0x%X), format 0x%X]"
             % (index, offset, width, height, depth, reg_pitch, fmt_color)
         )
 
@@ -390,7 +396,7 @@ class Tracer:
 
         return img_tags
 
-    def dump_textures(self, data, *args):
+    def dump_textures(self, _data, *_args):
         if not self.enable_texture_dumping:
             return []
 
@@ -430,18 +436,19 @@ class Tracer:
                     0x80000000 | params.depth_offset, params.depth_pitch * params.height
                 ),
             )
-        self._write(
-            "pgraph-rdi-vp-instructions.bin",
-            _read_pgraph_rdi(self.xbox, 0x100000, 136 * 4),
-        )
-        self._write(
-            "pgraph-rdi-vp-constants0.bin",
-            _read_pgraph_rdi(self.xbox, 0x170000, 192 * 4),
-        )
-        self._write(
-            "pgraph-rdi-vp-constants1.bin",
-            _read_pgraph_rdi(self.xbox, 0xCC0000, 192 * 4),
-        )
+        if self.enable_rdi:
+            self._write(
+                "pgraph-rdi-vp-instructions.bin",
+                _read_pgraph_rdi(self.xbox, 0x100000, 136 * 4),
+            )
+            self._write(
+                "pgraph-rdi-vp-constants0.bin",
+                _read_pgraph_rdi(self.xbox, 0x170000, 192 * 4),
+            )
+            self._write(
+                "pgraph-rdi-vp-constants1.bin",
+                _read_pgraph_rdi(self.xbox, 0xCC0000, 192 * 4),
+            )
 
         # FIXME: Respect anti-aliasing
         img_tags = ""

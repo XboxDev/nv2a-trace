@@ -72,7 +72,7 @@ def _wait_for_stable_push_buffer_state(
         # So we pause the pusher again to validate our state
         xbox_helper.pause_fifo_pusher()
 
-        time.sleep(0.1)
+        time.sleep(1.0)
 
         if verbose:
             print("   POST RESUME")
@@ -194,7 +194,8 @@ def main(args):
     pixel_dumping = not args.no_pixel
     enable_texture_dumping = pixel_dumping and not args.no_texture
     enable_surface_dumping = pixel_dumping and not args.no_surface
-    enable_raw_pixel_dumping = pixel_dumping and not args.no_raw_pixel
+    enable_raw_pixel_dumping = not args.no_raw_pixel
+    enable_rdi = pixel_dumping and not args.no_rdi
 
     if args.alpha_mode == "both":
         alpha_mode = Trace.Tracer.ALPHA_MODE_BOTH
@@ -214,6 +215,7 @@ def main(args):
         enable_texture_dumping=enable_texture_dumping,
         enable_surface_dumping=enable_surface_dumping,
         enable_raw_pixel_dumping=enable_raw_pixel_dumping,
+        enable_rdi=enable_rdi,
         verbose=args.verbose,
         max_frames=args.max_flip,
     )
@@ -274,6 +276,12 @@ if __name__ == "__main__":
         parser.add_argument(
             "--no-raw-pixel",
             help="Disable raw memory dumping of all graphical resources (surfaces, textures).",
+            action="store_true",
+        )
+
+        parser.add_argument(
+            "--no-rdi",
+            help="Disable dumping of RDI.",
             action="store_true",
         )
 

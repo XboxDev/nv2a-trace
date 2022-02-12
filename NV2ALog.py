@@ -13,7 +13,7 @@ class NV2ALog:
         self.path = path
 
         with open(self.path, "w", encoding="utf8") as logfile:
-            logfile.write("xemu style NV2A log from nv2a-trace.py\n\n")
+            logfile.write("pgraph method log from nv2a-trace.py\n\n")
 
     def log(self, message):
         """Append the given string to the nv2a log."""

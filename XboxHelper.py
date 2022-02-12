@@ -5,7 +5,6 @@
 # pylint: disable=chained-comparison
 
 import atexit
-import struct
 from collections import namedtuple
 from typing import Optional
 from typing import Tuple
@@ -90,6 +89,9 @@ CACHE_PULL_ADDR = _PFIFO(NV_PFIFO_CACHE1_GET)
 
 NV_PFIFO_CACHE1_METHOD = 0x00001800
 CACHE1_METHOD = _PFIFO(NV_PFIFO_CACHE1_METHOD)
+
+NV_PFIFO_CACHE1_DATA = 0xFD003804
+CACHE1_DATA = _PFIFO(NV_PFIFO_CACHE1_DATA)
 
 NV_PFIFO_RAMHT = 0x00000210
 RAM_HASHTABLE = _PFIFO(NV_PFIFO_RAMHT)
@@ -262,15 +264,14 @@ class XboxHelper:
         if self.delay():
             pass
 
-    def allow_populate_fifo_cache(self, wait_time=0.05):
+    def allow_populate_fifo_cache(self):
         """Temporarily enable the PFIFO pusher to populate the CACHE
 
         It is assumed that the pusher was previously paused, and it will be paused on
         exit.
         """
         self.resume_fifo_pusher()
-        if wait_time:
-            time.sleep(wait_time)
+        time.sleep(0.05)
         self.pause_fifo_pusher()
 
     def _dump_pb(self, start, end):
@@ -318,12 +319,12 @@ class XboxHelper:
 
         if print_contents:
             print("Cache:")
-            # Each CACHE entry is a pair of 32-bit integers and there are 128 entries.
-            methods_and_data = self.xbox.read(CACHE1_METHOD, 8 * 128)
-
+            # JFR: This is intentionally read in a loop as behavior is dependent on the
+            # implementation of xboxpy's `read`.
             for i in range(128):
-                cache1_method, cache1_data = struct.unpack("<LL", methods_and_data[:8])
-                methods_and_data = methods_and_data[8:]
+
+                cache1_method = self.xbox.read_u32(CACHE1_METHOD + i * 8)
+                cache1_data = self.xbox.read_u32(CACHE1_DATA + i * 8)
 
                 output = "  [0x%02X] 0x%04X (0x%08X)" % (i, cache1_method, cache1_data)
                 pull_offset = i * 8 - pull_addr
@@ -334,7 +335,7 @@ class XboxHelper:
                     output += " < put[%d]" % push_offset
 
                 print(output)
-        print()
+            print()
 
     def print_dma_addresses(self):
         push_addr = self.get_dma_push_address()
