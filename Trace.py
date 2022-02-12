@@ -426,14 +426,16 @@ class Tracer:
             self._write(
                 "mem-2.bin",
                 self.xbox.read(
-                    0x80000000 | params.color_offset, params.color_pitch * params.height
+                    Texture.AGP_MEMORY_BASE | params.color_offset,
+                    params.color_pitch * params.height,
                 ),
             )
         if params.depth_offset and self.enable_raw_pixel_dumping:
             self._write(
                 "mem-3.bin",
                 self.xbox.read(
-                    0x80000000 | params.depth_offset, params.depth_pitch * params.height
+                    Texture.AGP_MEMORY_BASE | params.depth_offset,
+                    params.depth_pitch * params.height,
                 ),
             )
         if self.enable_rdi:
