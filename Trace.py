@@ -62,9 +62,10 @@ def _read_pgraph_rdi(xbox: Xbox, offset: int, count: int):
     NV10_PGRAPH_RDI_INDEX = 0xFD400750
     NV10_PGRAPH_RDI_DATA = 0xFD400754
 
-    # JFR: Reading the DATA register 4 times returns X,Y,Z,W (not in that order as far
-    # as I remember), but during that time the INDEX register will stay constant, only
-    # on the final read I think it auto-increments the INDEX.
+    # TODO: Confirm behavior:
+    # It may be that reading the DATA register 4 times returns X,Y,Z,W (not
+    # necessarily in that order), but during that time the INDEX register will
+    # stay constant, only being incremented on the final read.
     # It is not safe and likely incorrect to do a bulk read so this must be done
     # individualy despite the interface communication overhead.
     xbox.write_u32(NV10_PGRAPH_RDI_INDEX, offset)
@@ -74,9 +75,9 @@ def _read_pgraph_rdi(xbox: Xbox, offset: int, count: int):
         data += struct.pack("<L", word)
 
     # FIXME: Restore original RDI?
-    # Context from JFR: It may not be possible to restore the original index.
-    # If you touch the INDEX register, you may or may not be resetting the internal state
-    # machine.
+    # Note: It may not be possible to restore the original index.
+    # If you touch the INDEX register, you may or may not be resetting the
+    # internal state machine.
 
     # FIXME: Assert the conditions from entry have not changed
     return data
