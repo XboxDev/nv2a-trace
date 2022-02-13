@@ -48,9 +48,10 @@ def main(args):
   # Create output folder
   try:
     os.mkdir(args.out)
-    Trace.OutputDir = args.out
   except FileExistsError:
     pass
+
+  Trace.setupOutput(args.out)
   
   if args.no_surface:
     Trace.SurfaceDumping = False

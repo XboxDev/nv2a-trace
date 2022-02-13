@@ -31,11 +31,19 @@ def _addHTML(xx):
     f.write("<td>%s</td>" % x)
   f.write("</tr>\n")
   f.close()
-f = open(debugLog,"w")
-f.write("<html><head><style>body { font-family: sans-serif; background:#333; color: #ccc } img { border: 1px solid #FFF; } td, tr, table { background: #444; padding: 10px; border:1px solid #888; border-collapse: collapse; }</style></head><body><table>\n")
-#FIXME: atexit close tags.. but yolo!
-f.close()
-_addHTML(["<b>#</b>", "<b>Opcode / Method</b>", "..."])
+
+def setupOutput(outputDir):
+  global OutputDir
+  global debugLog
+
+  OutputDir = outputDir
+  debugLog = os.path.join(OutputDir, "debug.html")
+
+  with open(debugLog,"w") as f:
+    f.write("<html><head><style>body { font-family: sans-serif; background:#333; color: #ccc } img { border: 1px solid #FFF; } td, tr, table { background: #444; padding: 10px; border:1px solid #888; border-collapse: collapse; }</style></head><body><table>\n")
+    #FIXME: atexit close tags.. but yolo!
+
+  _addHTML(["<b>#</b>", "<b>Opcode / Method</b>", "..."])
 
 
 def _htmlPrint(s):
@@ -127,10 +135,9 @@ def _kickFifo(xbox, expected_put):
 
 class Tracer():
 
-  def out(self, suffix, contents):
-    out_path = os.path.join(OutputDir, "command%d_" % self.commandCount) + suffix
-    with open(out_path, "wb") as f:
-      f.write(contents)
+  def __init__(self, dma_get_adrdr, dma_put_addr):
+    self.flipStallCount = 0
+    self.commandCount = 0
 
     self.real_dma_get_addr = dma_get_addr
     self.real_dma_put_addr = dma_put_addr
@@ -580,7 +587,7 @@ class Tracer():
       # Download this command from Xbox
       if (method_count == 0):
         # Halo: CE has cases where method_count is 0?!
-        html_print("Warning: Command 0x%X with method_count == 0\n" % method)
+        _htmlPrint("Warning: Command 0x%X with method_count == 0\n" % method)
         data = []
       else:
         command = xbox.read(0x80000000 | (get_addr + 4), method_count * 4)
