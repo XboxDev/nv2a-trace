@@ -11,9 +11,10 @@ It is also known to be unstable and can behave randomly.
 
 ## nv2a-trace
 
-nv2a-trace is similar to [apitrace](https://github.com/apitrace/apitrace), but targeting the Xbox GPU instead of desktop graphics APIs.
+nv2a-trace is similar to [apitrace](https://github.com/apitrace/apitrace), but targeting
+the Xbox GPU instead of desktop graphics APIs.
 
-nv2a-trace runs remotely on a development machine.
+nv2a-trace runs remotely on a development machine with XBDM.
 It allows you to stop your Xbox GPU command stream and inspect each GPU method before execution.
 It uses [xboxpy](https://github.com/XboxDev/xboxpy) to connect to a target Xbox.
 
@@ -32,16 +33,29 @@ Eventually there'll be one of the following:
 There is currently no parsable trace-file output, and replaying traces is not possible.
 
 
-### Usage
+### Building
 
-This project uses [xboxpy](https://github.com/XboxDev/xboxpy).
-Please read its documentation to find out how to install and configure it for your Xbox.
+1. This project uses [xboxpy](https://github.com/XboxDev/xboxpy).
+   Please read its documentation to find out how to install and configure it for your
+   Xbox.
 
-Afterwards, you can run these commands:
+   *NOTE*: Only the XBDM interface is supported.
+2. It also dynamically loads a binary built with the [nxdk](https://github.com/XboxDev/nxdk).
+   Please read the nxdk documentation to clone the repo onto your machine.
+3. Then check out this repository:
+   ```
+   git clone --recurse-submodules https://github.com/XboxDev/nv2a-trace.git
+   cd nv2a-trace
+   ```
+4. Build the tracer dynamic library:
+   ```
+   export NXDK_DIR=<wherever_you_cloned_the_nxdk>
+   cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=${NXDK_DIR}/share/toolchain-nxdk.cmake
+   cmake --build build --verbose
+   ```
 
+With the tracer built, you can run these commands:
 ```
-git clone https://github.com/XboxDev/nv2a-trace.git
-cd nv2a-trace
 python3 -u nv2a-trace.py
 ```
 
@@ -61,5 +75,4 @@ significantly better with manual formatting, you may surround the code with
 
 ---
 
-**(C) 2018 XboxDev maintainers**
-
+**(C) 2018-2022 XboxDev maintainers**

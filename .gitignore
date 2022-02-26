@@ -1,4 +1,7 @@
 __pycache__/
 
+# C build artifacts
+build/
+
 # Debug output
 out/

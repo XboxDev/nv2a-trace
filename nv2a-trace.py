@@ -14,6 +14,8 @@ import sys
 import time
 
 from AbortFlag import AbortFlag
+import py_dyndxt_bootstrap
+import ntrc_ddxt
 from Xbox import Xbox
 import XboxHelper
 import Trace
@@ -152,6 +154,19 @@ def experimental_disable_z_compression_and_tiling(xbox):
         disable_tiling(i)
 
 
+def _load_ntrc():
+    build_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "build")
+    py_dyndxt_bootstrap.set_dyndxt_lib_path(os.path.join(build_path, "ddxt", "lib"))
+    py_dyndxt_bootstrap.set_bootstrap_lib_path(
+        os.path.join(build_path, "py_dyndxt_bootstrap", "lib")
+    )
+    if not py_dyndxt_bootstrap.load(os.path.join(build_path, "libntrc_ddxt.dll")):
+        raise Exception("Failed to inject ntrc tracer")
+    if not ntrc_ddxt.NTRC().connect():
+        raise Exception("ntrc tracer installed but not responsive")
+    print("NTRC module installed successfully")
+
+
 def main(args):
 
     os.makedirs(args.out, exist_ok=True)
@@ -170,6 +185,8 @@ def main(args):
             sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
+
+    _load_ntrc()
 
     print("\n\nAwaiting stable PB state\n\n")
     dma_pull_addr, dma_push_addr = _wait_for_stable_push_buffer_state(
