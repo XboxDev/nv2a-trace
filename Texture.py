@@ -54,6 +54,30 @@ A8R8G8B8 = TextureDescription(32, (8, 8, 8, 8), (16, 8, 0, 24))
 X8R8G8B8 = TextureDescription(32, (8, 8, 8), (16, 8, 0))
 
 
+def f16_to_float(f):
+    if f == 0x0:
+        return 0.0
+    f = (f << 11) + 0x3C000000
+    return struct.unpack("f", f.to_bytes(4, "little"))[0]
+
+
+def f24_to_float(f):
+    assert (f >> 24) == 0
+    f &= 0xFFFFFF
+    if f == 0x0:
+        return 0.0
+    f = f << 7
+    return struct.unpack("f", f.to_bytes(4, "little"))[0]
+
+
+ZetaDescription = namedtuple(
+    "ZetaDescription",
+    ["depth_mask", "depth_shift", "stencil_mask", "bpp", "convert_float"],
+)
+Z24S8 = ZetaDescription(0xFFFFFF00, 8, 0xFF, 32, f24_to_float)
+Z16 = ZetaDescription(0xFFFF, 0, 0, 16, f16_to_float)
+
+
 def _decode_texture(
     data, size, pitch, swizzled, bits_per_pixel, channel_sizes, channel_offsets
 ):
@@ -182,6 +206,8 @@ def read_texture_parameters(xbox: Xbox) -> TextureParameters:
 
     swizzle_unk2 = xbox.read_u32(0xFD40086C)
 
+    setup_raster = xbox.read_u32(0xFD401990)
+
     clip_x = (surface_clip_x >> 0) & 0xFFFF
     clip_y = (surface_clip_y >> 0) & 0xFFFF
 
@@ -208,15 +234,18 @@ def read_texture_parameters(xbox: Xbox) -> TextureParameters:
     # FIXME: if surface_type is 0, we probably can't even draw..
 
     format_color = (draw_format >> 12) & 0xF
-    # FIXME: Support 3D surfaces.
-    _format_depth_buffer = (draw_format >> 18) & 0x3
+
+    z_float = (setup_raster >> 29) & 0x1
+    format_depth_buffer = (draw_format >> 18) & 0x3
 
     if not format_color:
         fmt_color = None
     else:
         fmt_color = surface_color_format_to_texture_format(format_color, swizzled)
-    # TODO: Extract swizzle and float state.
-    # fmt_depth = surface_zeta_format_to_texture_format(format_depth_buffer)
+
+    fmt_depth = surface_zeta_format_to_texture_format(
+        format_depth_buffer, swizzled, z_float
+    )
 
     return TextureParameters(
         width=width,
@@ -226,12 +255,99 @@ def read_texture_parameters(xbox: Xbox) -> TextureParameters:
         format_color=fmt_color,
         depth_pitch=depth_pitch,
         depth_offset=depth_offset,
-        format_depth=None,
+        format_depth=fmt_depth,
         surface_type=surface_type,
         swizzle_unk=swizzle_unk,
         swizzle_unk2=swizzle_unk2,
         swizzled=swizzled,
     )
+
+
+def dump_zeta(data, offset, pitch, fmt_depth, width, height):
+    """Convert the zeta buffer at the given offset into a PIL.Image."""
+    depth_img = Image.new("RGB", (width, height))
+    stencil_img = None
+
+    if fmt_depth == 0x2D:
+        info = (True, True, Z16)
+    elif fmt_depth == 0x31:
+        info = (False, True, Z16)
+    elif fmt_depth == 0x2C:
+        info = (True, False, Z16)
+    elif fmt_depth == 0x30:
+        info = (False, False, Z16)
+    elif fmt_depth == 0x2B:
+        info = (True, True, Z24S8)
+        stencil_img = Image.new("RGB", (width, height))
+    elif fmt_depth == 0x2F:
+        info = (False, True, Z24S8)
+        stencil_img = Image.new("RGB", (width, height))
+    elif fmt_depth == 0x2A:
+        info = (True, False, Z24S8)
+        stencil_img = Image.new("RGB", (width, height))
+    elif fmt_depth == 0x2E:
+        info = (False, False, Z24S8)
+        stencil_img = Image.new("RGB", (width, height))
+    else:
+        raise Exception("Unknown depth format :0x%X" % fmt_depth)
+
+    swizzle = info[0]
+    is_float = info[1]
+    fmt = info[2]
+
+    # FIXME: Avoid this nasty ~~convience feature~~ hack
+    if pitch == 0:
+        pitch = width * fmt.bpp // 8
+
+    assert len(data) == pitch * height
+
+    # FIXME: Does this work?
+    if False and swizzle:
+        data = xbox.Unswizzle(data, fmt.bpp, (width, height), pitch)
+
+    depth_values = {}
+    depth_max = 0
+    depth_min = 0xFFFFFF
+    stencil_values = {}
+
+    for y in range(height):
+        for x in range(width):
+            pixel_offset = y * pitch + x * fmt.bpp // 8
+            z_data = data[pixel_offset : pixel_offset + fmt.bpp // 8]
+            zeta = int.from_bytes(z_data, "little")
+            depth = (zeta & fmt.depth_mask) >> fmt.depth_shift
+            stencil = zeta & fmt.stencil_mask
+
+            if is_float:
+                depth = fmt.convert_float(depth)
+
+            depth_values[x, y] = depth
+            stencil_values[x, y] = 255 if stencil != 0 else 0
+
+            if depth > depth_max:
+                depth_max = depth
+
+            if depth < depth_min:
+                depth_min = depth
+
+    # Map depth values to [0, 255]
+    assert depth_max >= depth_min
+    depth_max -= depth_min
+    depth_scaler = 255 / depth_max if depth_max > 0 else 255
+    depth_pixels = depth_img.load()
+    if stencil_img is not None:
+        stencil_pixels = stencil_img.load()
+
+    for y in range(height):
+        for x in range(width):
+            depth = int((depth_values[x, y] - depth_min) * depth_scaler)
+            stencil = stencil_values[x, y]
+
+            depth_pixels[x, y] = (depth, depth, depth)
+            if stencil_img is not None:
+                stencil_pixels[x, y] = (stencil, stencil, stencil)
+
+    return (depth_img, stencil_img)
 
 
 def dump_texture(xbox, offset, pitch, fmt_color, width, height):
