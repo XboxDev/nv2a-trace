@@ -420,6 +420,12 @@ class Tracer:
             print("Warning: Invalid color format, skipping surface dump.")
             return []
 
+        if params.depth_offset:
+            depth_buffer = self.xbox.read(
+                Texture.AGP_MEMORY_BASE | params.depth_offset,
+                params.depth_pitch * params.height,
+            )
+
         # Dump stuff we might care about
         self._write("pgraph.bin", _dump_pgraph(self.xbox))
         self._write("pfb.bin", _dump_pfb(self.xbox))
@@ -434,10 +440,7 @@ class Tracer:
         if params.depth_offset and self.enable_raw_pixel_dumping:
             self._write(
                 "mem-3.bin",
-                self.xbox.read(
-                    Texture.AGP_MEMORY_BASE | params.depth_offset,
-                    params.depth_pitch * params.height,
-                ),
+                depth_buffer,
             )
         if self.enable_rdi:
             self._write(
@@ -473,7 +476,6 @@ class Tracer:
         else:
             alpha_path = None
 
-        path = "command%d--color.png" % (self.command_count)
         extra_html = []
 
         extra_html += [img_tags]
@@ -515,6 +517,53 @@ class Tracer:
             traceback.print_exc()
 
         self._save_image(img, no_alpha_path, alpha_path)
+
+        depth_path = "command%d--depth.png" % (self.command_count)
+        stencil_path = "command%d--stencil.png" % (self.command_count)
+
+        try:
+            if not params.depth_offset:
+                raise Exception("Depth offset is null")
+
+            self._dbg_print("Attempting to dump zeta")
+            depth, stencil = Texture.dump_zeta(
+                depth_buffer,
+                params.depth_offset,
+                params.depth_pitch,
+                params.format_depth,
+                params.width,
+                params.height,
+            )
+        except:
+            depth = None
+            stencil = None
+            print("Failed to dump zeta surface")
+            traceback.print_exc()
+
+        self._save_image(depth, None, depth_path)
+        self._save_image(stencil, None, stencil_path)
+
+        zeta_img_tags = '<img height="128px" src="%s" alt="%s"/>' % (
+            depth_path,
+            depth_path,
+        )
+
+        if stencil is not None:
+            zeta_img_tags += '<img height="128px" src="%s" alt="%s"/>' % (
+                stencil_path,
+                stencil_path,
+            )
+
+        extra_html += [zeta_img_tags]
+        extra_html += [
+            "zeta: [pitch = %d (0x%X)], at 0x%08X, format 0x%X]"
+            % (
+                params.depth_pitch,
+                params.depth_pitch,
+                params.depth_offset,
+                params.format_depth,
+            )
+        ]
 
         return extra_html
 
