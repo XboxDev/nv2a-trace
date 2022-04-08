@@ -115,6 +115,7 @@ class Tracer:
         self.nv2a_log = NV2ALog(os.path.join(output_dir, "nv2a_log.txt"))
         self.flip_stall_count = 0
         self.command_count = 0
+        self.end_op_count = 0
 
         self.real_dma_pull_addr = dma_pull_addr
         self.real_dma_push_addr = dma_push_addr
@@ -353,10 +354,12 @@ class Tracer:
                 layer_name = ""
 
             if self.alpha_mode != self.ALPHA_MODE_KEEP:
-                no_alpha_path = "command%d--tex_%d%scolor.png" % (
+                no_alpha_path = "command%d-draw%d--tex_%d%scolor_0x%X.png" % (
                     self.command_count,
+                    self.end_op_count,
                     index,
                     layer_name,
+                    adjusted_offset,
                 )
                 img_tags += '<img height="128px" src="%s" alt="%s"/>' % (
                     no_alpha_path,
@@ -366,10 +369,12 @@ class Tracer:
                 no_alpha_path = None
 
             if self.alpha_mode != self.ALPHA_MODE_DROP:
-                alpha_path = "command%d--tex_%d%scolor-a.png" % (
+                alpha_path = "command%d-draw%d--tex_%d%scolor_0x%X-a.png" % (
                     self.command_count,
+                    self.end_op_count,
                     index,
                     layer_name,
+                    adjusted_offset,
                 )
                 img_tags += '<img height="128px" src="%s" alt="%s"/>' % (
                     alpha_path,
@@ -456,7 +461,11 @@ class Tracer:
         # FIXME: Respect anti-aliasing
         img_tags = ""
         if self.alpha_mode != self.ALPHA_MODE_KEEP:
-            no_alpha_path = "command%d--color.png" % (self.command_count)
+            no_alpha_path = "command%d_draw%d--color_0x%X.png" % (
+                self.command_count,
+                self.end_op_count,
+                (params.color_offset or 0),
+            )
             img_tags += '<img height="128px" src="%s" alt="%s"/>' % (
                 no_alpha_path,
                 no_alpha_path,
@@ -465,7 +474,11 @@ class Tracer:
             no_alpha_path = None
 
         if self.alpha_mode != self.ALPHA_MODE_DROP:
-            alpha_path = "command%d--color-a.png" % (self.command_count)
+            alpha_path = "command%d_draw%d--color_0x%X-a.png" % (
+                self.command_count,
+                self.end_op_count,
+                (params.color_offset or 0),
+            )
             img_tags += '<img height="128px" src="%s" alt="%s"/>' % (
                 alpha_path,
                 alpha_path,
@@ -473,7 +486,6 @@ class Tracer:
         else:
             alpha_path = None
 
-        path = "command%d--color.png" % (self.command_count)
         extra_html = []
 
         extra_html += [img_tags]
@@ -558,7 +570,14 @@ class Tracer:
         if not data:
             return []
 
-        print("BEGIN %d" % self.command_count)
+        print(
+            "BEGIN %d (%d:%d)"
+            % (self.command_count, self.flip_stall_count, self.end_op_count)
+        )
+        self.nv2a_log.log(
+            "BEGIN: command %d frame_draw %d\n"
+            % (self.command_count, self.end_op_count)
+        )
 
         extra_html = []
         extra_html += self.dump_textures(data, *args)
@@ -572,6 +591,7 @@ class Tracer:
 
         extra_html = []
         extra_html += self.dump_surfaces(data, *args)
+        self.end_op_count += 1
         return extra_html
 
     def _begin_pgraph_recording(self, _data, *_args):
@@ -701,6 +721,7 @@ class Tracer:
     def _handle_flip_stall(self, _data, *_args):
         print("Flip (Stall)")
         self.flip_stall_count += 1
+        self.end_op_count = 0
 
         self.nv2a_log.log("Flip (stall) %d\n\n" % self.flip_stall_count)
 
@@ -900,7 +921,11 @@ class Tracer:
     def _write(self, suffix, contents):
         """Writes a raw byte dump."""
         out_path = (
-            os.path.join(self.output_dir, "command%d_" % self.command_count) + suffix
+            os.path.join(
+                self.output_dir,
+                "command%d_draw%d_" % (self.command_count, self.end_op_count),
+            )
+            + suffix
         )
         with open(out_path, "wb") as dumpfile:
             dumpfile.write(contents)
